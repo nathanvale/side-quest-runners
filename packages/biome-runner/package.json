@@ -1,6 +1,6 @@
 {
 	"name": "@side-quest/biome-runner",
-	"version": "0.0.0",
+	"version": "1.0.0",
 	"description": "Biome linter & formatter MCP server — structured diagnostics for Claude Code",
 	"author": {
 		"name": "Nathan Vale",
@@ -8,7 +8,9 @@
 	},
 	"license": "MIT",
 	"type": "module",
-	"bin": "./dist/index.js",
+	"bin": {
+		"biome-runner": "./dist/index.js"
+	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"exports": {
