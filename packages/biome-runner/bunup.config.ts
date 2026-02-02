@@ -1,7 +1,7 @@
 import { defineConfig } from 'bunup'
 
 export default defineConfig({
-	entry: './src/index.ts',
+	entry: './mcp/index.ts',
 	outDir: './dist',
 	format: 'esm',
 	dts: true,

@@ -1,0 +1,6 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {},
+	"include": ["mcp/**/*.ts"],
+	"exclude": ["node_modules", "dist", "**/*.test.ts"]
+}

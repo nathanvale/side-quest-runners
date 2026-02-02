@@ -4,10 +4,10 @@
 	"baseBranch": "main",
 	"changelog": [
 		"@changesets/changelog-github",
-		{ "repo": "{{GITHUB_USER}}/{{REPO_NAME}}" }
+		{ "repo": "nathanvale/side-quest-runners" }
 	],
 	"commit": false,
-	"packages": ["."],
+	"packages": ["packages/*"],
 	"fixed": [],
 	"ignore": [],
 	"linked": [],

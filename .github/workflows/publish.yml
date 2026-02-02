@@ -160,28 +160,39 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           HUSKY: 0
 
-      - name: Create GitHub Release (stable)
+      - name: Create GitHub Releases (stable, per-package)
         if: steps.intent.outputs.value == 'auto' && steps.changesets.outputs.published == 'true'
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          TAG="v${VERSION}"
-          echo "Creating GitHub release for ${TAG}"
-          # Create and push the tag if it doesn't already exist (idempotent for re-runs)
-          if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
-            git tag "${TAG}"
-            git push origin "${TAG}"
-          else
-            echo "Tag ${TAG} already exists, skipping tag creation"
-          fi
-          # Create the release if it doesn't already exist (idempotent for re-runs)
-          if ! gh release view "${TAG}" >/dev/null 2>&1; then
-            gh release create "${TAG}" \
-              --title "${TAG}" \
-              --notes-file CHANGELOG.md \
-              --verify-tag
-          else
-            echo "Release ${TAG} already exists, skipping release creation"
-          fi
+          # Parse publishedPackages JSON from changesets action
+          # Format: [{"name": "@side-quest/bun-runner", "version": "1.0.0"}, ...]
+          PACKAGES='${{ steps.changesets.outputs.publishedPackages }}'
+          echo "Published packages: ${PACKAGES}"
+
+          echo "$PACKAGES" | node -e "
+            const pkgs = JSON.parse(require('fs').readFileSync('/dev/stdin', 'utf8'));
+            for (const pkg of pkgs) {
+              // Create tag like @side-quest/bun-runner@1.0.0
+              console.log(pkg.name + '@' + pkg.version);
+            }
+          " | while IFS= read -r TAG; do
+            echo "Creating GitHub release for ${TAG}"
+            # Create and push the tag if it doesn't already exist (idempotent for re-runs)
+            if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
+              git tag "${TAG}"
+              git push origin "${TAG}"
+            else
+              echo "Tag ${TAG} already exists, skipping tag creation"
+            fi
+            # Create the release if it doesn't already exist (idempotent for re-runs)
+            if ! gh release view "${TAG}" >/dev/null 2>&1; then
+              gh release create "${TAG}" \
+                --title "${TAG}" \
+                --notes "Published to npm: \`npm install ${TAG}\`" \
+                --verify-tag
+            else
+              echo "Release ${TAG} already exists, skipping release creation"
+            fi
+          done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

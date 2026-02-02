@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Generate a changeset file using PR context when none exists.
 # Expects env PR_TITLE and PR_NUMBER. Writes/commits/pushes the new file.
+#
+# Monorepo-aware: Generates entries for all packages in packages/*.
 
 set -euo pipefail
 
@@ -29,10 +31,26 @@ if printf '%s' "$LOWER" | grep -q 'breaking'; then TYPE="major"; fi
 SAFE_NAME=$(printf '%s' "$TITLE" | sed -E 's/[^[:alnum:][:space:]-]//g' | tr ' ' '-')
 FILE=".changeset/auto-${SAFE_NAME:-change}.md"
 
+# Discover all workspace packages
+PACKAGES=()
+for pkg_dir in packages/*/; do
+  if [[ -f "${pkg_dir}package.json" ]]; then
+    PKG_NAME=$(node -p "require('./${pkg_dir}package.json').name")
+    PACKAGES+=("$PKG_NAME")
+  fi
+done
+
+if [[ ${#PACKAGES[@]} -eq 0 ]]; then
+  echo "::warning::No packages found in packages/. Skipping changeset generation."
+  exit 0
+fi
+
 mkdir -p .changeset
 {
   printf '---\n'
-  printf 'imessage-timeline: %s\n' "$TYPE"
+  for pkg in "${PACKAGES[@]}"; do
+    printf '"%s": %s\n' "$pkg" "$TYPE"
+  done
   printf '---\n\n'
   printf '%s\n' "$TITLE"
 } >"$FILE"

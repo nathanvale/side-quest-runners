@@ -1,0 +1,57 @@
+{
+	"name": "@side-quest/biome-runner",
+	"version": "0.0.0",
+	"description": "Biome linter & formatter MCP server — structured diagnostics for Claude Code",
+	"author": {
+		"name": "Nathan Vale",
+		"url": "https://github.com/nathanvale"
+	},
+	"license": "MIT",
+	"type": "module",
+	"bin": "./dist/index.js",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist/**",
+		"README.md",
+		"LICENSE",
+		"CHANGELOG.md"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nathanvale/side-quest-runners.git",
+		"directory": "packages/biome-runner"
+	},
+	"bugs": {
+		"url": "https://github.com/nathanvale/side-quest-runners/issues"
+	},
+	"homepage": "https://github.com/nathanvale/side-quest-runners/tree/main/packages/biome-runner#readme",
+	"keywords": [
+		"mcp",
+		"claude-code",
+		"biome",
+		"linting",
+		"formatting"
+	],
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"scripts": {
+		"build": "bunx bunup",
+		"clean": "rimraf dist 2>/dev/null || true",
+		"test": "bun test",
+		"test:ci": "TF_BUILD=true bun test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@side-quest/core": "^0.1.1"
+	}
+}

@@ -1,0 +1,269 @@
+#!/usr/bin/env bun
+
+/// <reference types="bun-types" />
+
+/**
+ * TypeScript checker MCP server.
+ *
+ * Runs `bunx tsc --noEmit --pretty false` from the nearest tsconfig/jsconfig
+ * and reports errors in a Claude-friendly format.
+ */
+
+import fs from 'node:fs'
+import path from 'node:path'
+import {
+	findNearestConfig,
+	type NearestConfigResult,
+} from '@side-quest/core/fs'
+import {
+	createCorrelationId,
+	createPluginLogger,
+} from '@side-quest/core/logging'
+import { startServer, tool, z } from '@side-quest/core/mcp'
+import { ResponseFormat, wrapToolHandler } from '@side-quest/core/mcp-response'
+import { spawnWithTimeout } from '@side-quest/core/spawn'
+import { validatePathOrDefault } from '@side-quest/core/validation'
+
+// Initialize logger
+const { initLogger, getSubsystemLogger } = createPluginLogger({
+	name: 'tsc-runner',
+	subsystems: ['mcp'],
+})
+
+initLogger().catch(console.error)
+
+const mcpLogger = getSubsystemLogger('mcp')
+
+// --- Config ---
+
+/** Valid TypeScript configuration file names */
+const TSC_CONFIG_FILES = ['tsconfig.json', 'jsconfig.json'] as const
+
+const TSC_TIMEOUT_MS = 30_000
+
+// --- Types ---
+
+export interface TscError {
+	file: string
+	line: number
+	col: number
+	message: string
+}
+
+export interface TscParseResult {
+	errorCount: number
+	errors: TscError[]
+}
+
+interface TscRunResult {
+	exitCode: number
+	timedOut: boolean
+	output: string
+	cwd: string
+	configPath: string
+}
+
+// --- Parsing ---
+
+/**
+ * Parse TypeScript compiler output into structured format.
+ *
+ * @param output - Raw stdout/stderr from tsc command
+ * @returns Structured error data with count and detailed error array
+ */
+export function parseTscOutput(output: string): TscParseResult {
+	const errors: TscError[] = []
+
+	// TSC output format: file(line,col): error TS1234: message
+	const errorPattern = /^(.+?)\((\d+),(\d+)\):\s*error\s+TS\d+:\s*(.+)$/gm
+	const matches = output.matchAll(errorPattern)
+
+	for (const match of matches) {
+		const [, file, line, col, message] = match
+		if (file && line && col && message) {
+			errors.push({
+				file,
+				line: Number.parseInt(line, 10),
+				col: Number.parseInt(col, 10),
+				message,
+			})
+		}
+	}
+
+	return { errorCount: errors.length, errors }
+}
+
+// --- Config Resolution ---
+
+/**
+ * Find the nearest TypeScript configuration file by walking up from a file path.
+ */
+async function findNearestTsConfig(
+	filePath: string,
+): Promise<NearestConfigResult> {
+	return findNearestConfig(filePath, TSC_CONFIG_FILES)
+}
+
+// --- Helpers ---
+
+function formatResult(result: TscRunResult, format: ResponseFormat): string {
+	const parsed = parseTscOutput(result.output)
+
+	if (format === ResponseFormat.JSON) {
+		return JSON.stringify(
+			{
+				cwd: result.cwd,
+				configPath: result.configPath,
+				timedOut: result.timedOut,
+				exitCode: result.exitCode,
+				errors: parsed.errors,
+				errorCount: parsed.errorCount,
+			},
+			null,
+			2,
+		)
+	}
+
+	// Markdown format
+	if (result.timedOut) {
+		return `TypeScript check timed out after ${TSC_TIMEOUT_MS / 1000}s in ${result.cwd}.`
+	}
+
+	if (result.exitCode === 0 || parsed.errorCount === 0) {
+		return `TypeScript passed (cwd: ${result.cwd})`
+	}
+
+	const lines: string[] = [
+		`${parsed.errorCount} type error(s) (cwd: ${result.cwd})`,
+		`Config: ${result.configPath}`,
+	]
+
+	for (const error of parsed.errors) {
+		lines.push(`- ${error.file}:${error.line}:${error.col} — ${error.message}`)
+	}
+
+	return lines.join('\n')
+}
+
+async function resolveWorkdir(targetPath?: string): Promise<{
+	cwd: string
+	configPath: string
+}> {
+	const resolved = targetPath ? path.resolve(targetPath) : process.cwd()
+
+	if (!fs.existsSync(resolved)) {
+		throw new Error(`Path not found: ${resolved}`)
+	}
+
+	const stat = fs.statSync(resolved)
+
+	// If a directory is provided, prefer a config in that directory
+	if (stat.isDirectory()) {
+		for (const candidate of TSC_CONFIG_FILES) {
+			const candidatePath = path.join(resolved, candidate)
+			if (fs.existsSync(candidatePath)) {
+				return { cwd: resolved, configPath: candidatePath }
+			}
+		}
+
+		// Fall back to searching upwards from the directory
+		const nearest = await findNearestTsConfig(path.join(resolved, 'index.ts'))
+		if (nearest.found && nearest.configDir && nearest.configPath) {
+			return { cwd: nearest.configDir, configPath: nearest.configPath }
+		}
+
+		throw new Error(
+			`No tsconfig.json or jsconfig.json found for directory ${resolved}`,
+		)
+	}
+
+	// If a file is provided, walk up to find the nearest config
+	const nearest = await findNearestTsConfig(resolved)
+	if (nearest.found && nearest.configDir && nearest.configPath) {
+		return { cwd: nearest.configDir, configPath: nearest.configPath }
+	}
+
+	throw new Error(
+		`No tsconfig.json or jsconfig.json found for file ${resolved}`,
+	)
+}
+
+async function runTsc(cwd: string, configPath: string): Promise<TscRunResult> {
+	const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
+		['bunx', 'tsc', '--noEmit', '--pretty', 'false'],
+		TSC_TIMEOUT_MS,
+		{
+			cwd,
+			env: { ...process.env, CI: 'true' },
+		},
+	)
+
+	return {
+		exitCode,
+		timedOut,
+		output: `${stdout}${stderr}`,
+		cwd,
+		configPath,
+	}
+}
+
+// --- Tool ---
+
+tool(
+	'tsc_check',
+	{
+		description:
+			'Run TypeScript type checking (tsc --noEmit) using the nearest tsconfig/jsconfig.',
+		inputSchema: {
+			path: z
+				.string()
+				.optional()
+				.describe(
+					'Optional file or directory to determine which tsconfig to use (default: current directory)',
+				),
+			response_format: z
+				.enum(['markdown', 'json'])
+				.optional()
+				.default('json')
+				.describe("Output format: 'markdown' or 'json' (default)"),
+		},
+		annotations: {
+			readOnlyHint: true,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: false,
+		},
+	},
+	wrapToolHandler(
+		async (args: { path?: string }, format: ResponseFormat) => {
+			// Validate path for security
+			const validatedPath = await validatePathOrDefault(args.path)
+
+			// Resolve working directory and config
+			const { cwd, configPath } = await resolveWorkdir(validatedPath)
+
+			// Run TypeScript compiler
+			const result = await runTsc(cwd, configPath)
+
+			// Format and return result
+			return formatResult(result, format)
+		},
+		{
+			toolName: 'tsc_check',
+			logger: mcpLogger,
+			createCid: createCorrelationId,
+		},
+	),
+)
+
+// Only start the server when run directly, not when imported by tests
+if (import.meta.main) {
+	startServer('tsc-runner', {
+		version: '1.0.0',
+		fileLogging: {
+			enabled: true,
+			subsystems: ['mcp'],
+			level: 'info',
+		},
+	})
+}
