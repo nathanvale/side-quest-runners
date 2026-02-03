@@ -25,6 +25,10 @@ Or in `.mcp.json`:
 }
 ```
 
+## Response Format
+
+All tools accept a `response_format` parameter (`"markdown"` or `"json"`). Use `"json"` for token-efficient structured output in agent pipelines.
+
 ## License
 
 MIT
