@@ -77,7 +77,6 @@ jobs:
           echo "Before cleanup: $ROGUE_COUNT rogue folders found in project root"
 
           find . -maxdepth 1 -type d -name '*@@@*' -exec rm -rf {} + 2>/dev/null || true
-          find . -maxdepth 1 -type d -name '@*' ! -name '.@*' -exec rm -rf {} + 2>/dev/null || true
           find . -maxdepth 1 -type d -regex '.*/[a-z].*@[0-9].*' -exec rm -rf {} + 2>/dev/null || true
           rm -rf node_modules/.bun node_modules/.old_modules* 2>/dev/null || true
 
