@@ -78,7 +78,7 @@ jobs:
 
           find . -maxdepth 1 -type d -name '*@@@*' -exec rm -rf {} + 2>/dev/null || true
           find . -maxdepth 1 -type d -regex '.*/[a-z].*@[0-9].*' -exec rm -rf {} + 2>/dev/null || true
-          rm -rf node_modules/.bun node_modules/.old_modules* 2>/dev/null || true
+          rm -rf node_modules/.old_modules* 2>/dev/null || true
 
           REMAINING=$(find . -maxdepth 1 -type d ! -name '.' | grep -Evc "^\./($KNOWN_DIRS)$" || echo 0)
           echo "After cleanup: $REMAINING folders remaining"
