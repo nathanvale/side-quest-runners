@@ -85,6 +85,16 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Ensure changesets CLI is Node-resolvable
+        run: |
+          # The changesets/action uses Node.js require() internally.
+          # Bun's module layout may not be resolvable by Node, so install
+          # @changesets/cli via npm as a fallback to guarantee resolution.
+          if ! node -e "require.resolve('@changesets/cli')" 2>/dev/null; then
+            echo "::notice::@changesets/cli not Node-resolvable, installing via npm"
+            npm install --no-save @changesets/cli @changesets/changelog-github
+          fi
+
       - name: Fix conflicting registry in bunfig.toml
         run: |
           # Setup Bun creates bunfig.toml with registry, which conflicts with Setup Node's registry.
