@@ -1,5 +1,11 @@
 # @side-quest/bun-runner
 
+## 1.0.1
+
+### Patch Changes
+
+- [#2](https://github.com/nathanvale/side-quest-runners/pull/2) [`429c007`](https://github.com/nathanvale/side-quest-runners/commit/429c00757913f8caa1c15b3a2fd4a7995926b92d) Thanks [@nathanvale](https://github.com/nathanvale)! - Document response_format parameter in README files
+
 ## 1.0.0
 
 ### Major Changes
