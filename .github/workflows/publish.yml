@@ -88,10 +88,12 @@ jobs:
       - name: Ensure changesets CLI is Node-resolvable
         run: |
           # The changesets/action uses Node.js require() internally.
-          # Bun's module layout uses .bun/ symlinks that Node can resolve in shell
-          # but the action's bundled JS runtime cannot. Always install via npm to
-          # guarantee a Node-compatible module layout exists.
-          npm install --no-save @changesets/cli @changesets/changelog-github
+          # Bun's module layout uses .bun/ symlinks that the action's bundled JS
+          # runtime cannot resolve. npm install --no-save also fails because npm
+          # can't parse Bun's node_modules layout.
+          # Solution: install into a separate prefix and add to NODE_PATH.
+          npm install --prefix .npm-changesets @changesets/cli @changesets/changelog-github
+          echo "NODE_PATH=$(pwd)/.npm-changesets/node_modules" >> "$GITHUB_ENV"
 
       - name: Fix conflicting registry in bunfig.toml
         run: |
