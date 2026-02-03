@@ -1,5 +1,13 @@
 # @side-quest/biome-runner
 
+## 1.0.2
+
+### Patch Changes
+
+- Fix import.meta.main being transformed to \_\_require by adding target: 'bun' to bunup config
+
+  The bunup bundler was transforming `import.meta.main` into CommonJS-style `__require.main == __require.module`, but the output format is ESM where `__require` doesn't exist. Adding `target: 'bun'` preserves Bun-specific features and adds the `// @bun` pragma.
+
 ## 1.0.1
 
 ### Patch Changes
