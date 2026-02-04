@@ -176,4 +176,105 @@ Received: "world"
 		expect(result.failures[1]?.line).toBe(20)
 		expect(result.failures[1]?.message).toContain('test two')
 	})
+
+	it('ignores console.error output when summary shows 0 fail', () => {
+		// This is the key fix for issue #11 - console.error from tests
+		// should not create spurious failures when summary says 0 fail
+		const output = `bun test v1.3.2
+
+error: Logging is broken
+error: Another console.error message
+(pass) instrumentation > test [1.00ms]
+
+ 3 pass
+ 0 fail`
+
+		const result = parseBunTestOutput(output)
+
+		expect(result.passed).toBe(3)
+		expect(result.failed).toBe(0)
+		expect(result.failures).toHaveLength(0)
+	})
+
+	it('captures real failures even when console.error is present', () => {
+		const output = `bun test v1.3.2
+
+error: Console noise before test
+error: assertion failed
+Expected: 5
+Received: 4
+      at /path/test.ts:10:5
+(fail) actual failing test [1.00ms]
+
+ 2 pass
+ 1 fail`
+
+		const result = parseBunTestOutput(output)
+
+		expect(result.passed).toBe(2)
+		expect(result.failed).toBe(1)
+		expect(result.failures).toHaveLength(1)
+		expect(result.failures[0]?.message).toContain('actual failing test')
+	})
+
+	it('handles v1.3+ format with mixed (pass) and (fail) markers', () => {
+		const output = `bun test v1.3.3
+
+error: Logging is broken
+(pass) test one [1.00ms]
+error: actual test error
+      at /path/fail.ts:5:3
+(fail) test two [2.00ms]
+
+ 1 pass
+ 1 fail`
+
+		const result = parseBunTestOutput(output)
+
+		expect(result.passed).toBe(1)
+		expect(result.failed).toBe(1)
+		expect(result.failures).toHaveLength(1)
+		expect(result.failures[0]?.file).toBe('/path/fail.ts')
+	})
+
+	it('discards orphan error: blocks without (fail) marker in v1.3+ format', () => {
+		// Orphan error: lines that are never terminated by (fail)
+		// should be discarded as they're likely console.error output
+		const output = `bun test v1.3.2
+
+error: This is console.error output
+Some additional logging
+(pass) passing test [1.00ms]
+
+ 1 pass
+ 0 fail`
+
+		const result = parseBunTestOutput(output)
+
+		expect(result.passed).toBe(1)
+		expect(result.failed).toBe(0)
+		expect(result.failures).toHaveLength(0)
+	})
+
+	it('handles large test suite with console.error noise', () => {
+		// Simulates the real-world scenario from side-quest-marketplace
+		// where 3387 tests pass but console.error creates false positives
+		const output = `bun test v1.3.2
+
+error: Logging is broken
+error: Warning: some deprecation notice
+(pass) test 1 [0.01ms]
+(pass) test 2 [0.01ms]
+(pass) test 3 [0.01ms]
+
+ 3387 pass
+ 0 fail
+Ran 3387 tests across 150 files. [25.00s]`
+
+		const result = parseBunTestOutput(output)
+
+		expect(result.passed).toBe(3387)
+		expect(result.failed).toBe(0)
+		expect(result.failures).toHaveLength(0)
+	})
 })
