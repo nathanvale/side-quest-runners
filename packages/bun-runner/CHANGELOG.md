@@ -1,5 +1,11 @@
 # @side-quest/bun-runner
 
+## 1.0.3
+
+### Patch Changes
+
+- [#12](https://github.com/nathanvale/side-quest-runners/pull/12) [`aa20a3f`](https://github.com/nathanvale/side-quest-runners/commit/aa20a3f190a86e978f9bd7039e525a1321b6e4dd) Thanks [@nathanvale](https://github.com/nathanvale)! - Fix console.error false positive in bun_runTests parser. Tests emitting console.error output as part of expected behavior no longer create spurious failures when the summary line shows 0 fail.
+
 ## 1.0.2
 
 ### Patch Changes
