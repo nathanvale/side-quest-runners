@@ -52,6 +52,9 @@
 		"test:ci": "TF_BUILD=true bun run --filter '*' test",
 		"test:coverage": "bun run --filter '*' test:coverage",
 		"test:watch": "bun test --watch",
+		"check:publint": "for pkg in packages/*/; do echo \"--- $pkg ---\" && bunx publint \"$pkg\"; done",
+		"check:types": "for pkg in packages/*/; do echo \"--- $pkg ---\" && bunx @arethetypeswrong/cli --pack \"$pkg\"; done",
+		"pack:dry": "mkdir -p .pack && for pkg in packages/*/; do (cd \"$pkg\" && bun pm pack --destination ../../.pack); done",
 		"typecheck": "bun run --filter '*' typecheck",
 		"validate": "bun run lint && bun run typecheck && bun run build && TF_BUILD=true bun run test",
 		"version:pre": "changeset version"
