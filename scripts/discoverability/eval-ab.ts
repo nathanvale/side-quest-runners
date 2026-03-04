@@ -3,8 +3,9 @@
 /**
  * A/B discoverability evaluator for MCP tool descriptions.
  *
- * Why: Token size alone does not prove discoverability. This script measures
- * first-choice routing quality for "current" and "half-cut" description sets.
+ * Why: This compares routing quality for pre-uplift descriptions vs
+ * post-uplift descriptions so we can quantify whether the uplift improved
+ * (or regressed) first-choice tool selection.
  */
 
 type ToolDef = {
@@ -25,9 +26,9 @@ type RouterPick = {
 	second: string
 }
 
-type VariantName = 'current' | 'half-cut'
+type VariantName = 'before-uplift' | 'after-uplift'
 
-const TOOLS_CURRENT: ToolDef[] = [
+const TOOLS_BEFORE_UPLIFT: ToolDef[] = [
 	{
 		name: 'tsc_check',
 		title: 'TypeScript Type Checker',
@@ -72,7 +73,7 @@ const TOOLS_CURRENT: ToolDef[] = [
 	},
 ]
 
-const TOOLS_HALF_CUT: ToolDef[] = [
+const TOOLS_AFTER_UPLIFT: ToolDef[] = [
 	{
 		name: 'tsc_check',
 		title: 'TypeScript Type Checker',
@@ -101,19 +102,19 @@ const TOOLS_HALF_CUT: ToolDef[] = [
 		name: 'biome_lintCheck',
 		title: 'Biome Lint Checker',
 		description:
-			'Check files with Biome and return lint/format diagnostics without writing changes. Use after edits. Read-only. No fixes or type checks. Use biome_lintFix to fix; use tsc_check for types.',
+			'Run Biome lint checks on a file or directory. Returns error/warning counts and structured diagnostics. Read-only. Does not write fixes. Use biome_lintFix to apply fixes.',
 	},
 	{
 		name: 'biome_lintFix',
-		title: 'Biome Lint & Format Fixer',
+		title: 'Biome Lint Fixer',
 		description:
-			'Auto-fix Biome lint/format issues with --write, then return remaining diagnostics. Use after biome_lintCheck. Modifies files. No type checks. Use biome_lintCheck for read-only checks; use tsc_check for types.',
+			'Run Biome format/check with --write to auto-fix issues. Returns fixed counts and remaining diagnostics. Writes files. Use biome_lintCheck for read-only inspection.',
 	},
 	{
 		name: 'biome_formatCheck',
 		title: 'Biome Format Checker',
 		description:
-			'Check Biome formatting compliance and list unformatted files. Use for CI/pre-commit format gates. Read-only. No fixes or type checks. Use biome_lintFix to fix formatting; biome_lintCheck for lint diagnostics.',
+			'Check whether files are formatted with Biome without writing changes. Returns formatted status and unformatted files. Read-only. Use biome_lintFix to apply formatting.',
 	},
 ]
 
@@ -276,10 +277,6 @@ function parseFloatArg(name: string, fallback: number): number {
 	return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function getToolByName(tools: ToolDef[], name: string): ToolDef | undefined {
-	return tools.find((tool) => tool.name === name)
-}
-
 function normalizeToolName(raw: string, allowed: string[]): string | null {
 	const cleaned = raw.trim().replace(/^`|`$/g, '')
 	if (allowed.includes(cleaned)) {
@@ -377,8 +374,8 @@ function computeMetrics(
 	}>,
 ) {
 	const grouped = {
-		current: rows.filter((r) => r.variant === 'current'),
-		'half-cut': rows.filter((r) => r.variant === 'half-cut'),
+		'before-uplift': rows.filter((r) => r.variant === 'before-uplift'),
+		'after-uplift': rows.filter((r) => r.variant === 'after-uplift'),
 	} as const
 
 	const byVariant = Object.fromEntries(
@@ -425,10 +422,11 @@ function computeMetrics(
 
 	const delta = {
 		firstChoiceAccuracy:
-			byVariant['half-cut'].firstChoiceAccuracy -
-			byVariant.current.firstChoiceAccuracy,
+			byVariant['after-uplift'].firstChoiceAccuracy -
+			byVariant['before-uplift'].firstChoiceAccuracy,
 		meanExtraCalls:
-			byVariant['half-cut'].meanExtraCalls - byVariant.current.meanExtraCalls,
+			byVariant['after-uplift'].meanExtraCalls -
+			byVariant['before-uplift'].meanExtraCalls,
 	}
 
 	return { byVariant, delta }
@@ -451,8 +449,8 @@ async function main(): Promise<void> {
 	)
 
 	const variants: Array<{ name: VariantName; tools: ToolDef[] }> = [
-		{ name: 'current', tools: TOOLS_CURRENT },
-		{ name: 'half-cut', tools: TOOLS_HALF_CUT },
+		{ name: 'before-uplift', tools: TOOLS_BEFORE_UPLIFT },
+		{ name: 'after-uplift', tools: TOOLS_AFTER_UPLIFT },
 	]
 
 	const rows: Array<{
@@ -497,8 +495,14 @@ async function main(): Promise<void> {
 		suite: suiteArg,
 		promptCount: prompts.length,
 		variants: {
-			current: TOOLS_CURRENT.map((t) => ({ name: t.name, title: t.title })),
-			halfCut: TOOLS_HALF_CUT.map((t) => ({ name: t.name, title: t.title })),
+			beforeUplift: TOOLS_BEFORE_UPLIFT.map((t) => ({
+				name: t.name,
+				title: t.title,
+			})),
+			afterUplift: TOOLS_AFTER_UPLIFT.map((t) => ({
+				name: t.name,
+				title: t.title,
+			})),
 		},
 		metrics,
 		rows,
@@ -512,8 +516,8 @@ async function main(): Promise<void> {
 		repeats,
 		suite: suiteArg,
 		promptCount: prompts.length,
-		current: metrics.byVariant.current,
-		halfCut: metrics.byVariant['half-cut'],
+		beforeUplift: metrics.byVariant['before-uplift'],
+		afterUplift: metrics.byVariant['after-uplift'],
 		delta: metrics.delta,
 	}
 	console.log(JSON.stringify(summary, null, 2))

@@ -1,7 +1,7 @@
 /**
  * Bun test output parsing utilities
  *
- * Extracted to a separate file to allow testing without importing mcpez
+ * Extracted to a separate file for independent unit testing without MCP SDK imports.
  */
 
 export interface TestFailure {

@@ -6,65 +6,286 @@
  * Bun Test Runner MCP Server
  *
  * Provides tools to run Bun tests with structured, token-efficient output.
- * Filters out passing tests and verbose logs, focusing agents on failures.
- *
- * Uses native Bun.spawn() for better performance over Node.js child_process.
  */
 
-import {
-	createCorrelationId,
-	createPluginLogger,
-} from '@side-quest/core/logging'
-import { startServer, tool, z } from '@side-quest/core/mcp'
-import {
-	createLoggerAdapter,
-	ResponseFormat,
-	wrapToolHandler,
-} from '@side-quest/core/mcp-response'
-import { spawnWithTimeout } from '@side-quest/core/spawn'
-import {
-	validatePath,
-	validateShellSafePattern,
-} from '@side-quest/core/validation'
+import { realpath } from 'node:fs/promises'
+import path from 'node:path'
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { z } from 'zod'
 import {
 	parseBunTestOutput,
 	type TestFailure,
 	type TestSummary,
 } from './parse-utils'
 
-// Initialize logger
-const { initLogger, getSubsystemLogger } = createPluginLogger({
-	name: 'bun-runner',
-	subsystems: ['mcp'],
+/**
+ * Bridge Zod-inferred output types to the SDK's Record<string, unknown>.
+ *
+ * Why: CallToolResult.structuredContent is typed as Record<string, unknown>,
+ * but our Zod-inferred types have concrete keys that TypeScript considers
+ * structurally incompatible. This helper centralizes the unavoidable cast.
+ */
+function toStructured(value: object): Record<string, unknown> {
+	return value as Record<string, unknown>
+}
+
+const TEST_TIMEOUT_MS = 30_000
+const COVERAGE_TIMEOUT_MS = 60_000
+
+const failureSchema = z.object({
+	file: z.string(),
+	message: z.string(),
+	line: z.number().nullable(),
+	stack: z.string().nullable(),
 })
 
-// Initialize logger on server startup
-initLogger().catch(console.error)
+const testSummarySchema = z.object({
+	passed: z.number(),
+	failed: z.number(),
+	total: z.number(),
+	failures: z.array(failureSchema),
+})
 
-const mcpLogger = getSubsystemLogger('mcp')
+const testCoverageSchema = z.object({
+	summary: testSummarySchema,
+	coverage: z.object({
+		percent: z.number(),
+		uncovered: z.array(z.string()),
+	}),
+})
 
-// --- Helpers ---
+let _gitRootPromise: Promise<string> | null = null
 
 /**
- * Run Bun tests and parse output using spawnWithTimeout from core
+ * Get the git root once per process using promise coalescing.
  *
- * Uses `bun test` directly - Bun natively handles workspace test discovery,
- * searching all packages for matching test files. The previous `--filter '*'`
- * approach broke pattern matching because patterns were interpreted as test
- * name filters within each package rather than cross-workspace file matching.
+ * Why: every path validation needs repo boundaries, so one shared promise avoids
+ * duplicate subprocesses during concurrent tool calls.
  */
-async function runBunTests(pattern?: string): Promise<TestSummary> {
-	// Simple: bun test handles workspaces natively
-	const cmd = pattern ? ['bun', 'test', pattern] : ['bun', 'test']
-	const TIMEOUT_MS = 30000
+export function getGitRoot(): Promise<string> {
+	if (_gitRootPromise !== null) {
+		return _gitRootPromise
+	}
+	_gitRootPromise = resolveGitRoot()
+	return _gitRootPromise
+}
+
+async function resolveGitRoot(): Promise<string> {
+	const proc = Bun.spawn(['git', 'rev-parse', '--show-toplevel'], {
+		stdout: 'pipe',
+		stderr: 'pipe',
+	})
+
+	const [stdout, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		proc.exited,
+	])
+
+	if (exitCode !== 0) {
+		throw new Error('Not inside a git repository')
+	}
+
+	return realpath(stdout.trim())
+}
+
+/**
+ * Reset git-root cache for tests.
+ */
+export function _resetGitRootCache(): void {
+	_gitRootPromise = null
+}
+
+/**
+ * Validate and canonicalize a path while enforcing repository boundaries.
+ *
+ * Why: test file/path inputs are user-controlled and must not escape the repo.
+ */
+export async function validatePath(inputPath: string): Promise<string> {
+	if (inputPath.includes('\x00')) {
+		throw new Error('Path contains null byte')
+	}
+	if (hasControlCharacters(inputPath)) {
+		throw new Error(
+			`Path contains control characters: ${JSON.stringify(inputPath)}`,
+		)
+	}
+	if (!inputPath || inputPath.trim() === '') {
+		throw new Error('Path cannot be empty')
+	}
+
+	const resolvedPath = path.resolve(inputPath)
+	let realInputPath: string
+
+	try {
+		realInputPath = await realpath(resolvedPath)
+	} catch (error) {
+		const err = error as NodeJS.ErrnoException
+		if (err.code === 'ENOENT') {
+			realInputPath = await resolveNearestAncestor(resolvedPath)
+		} else {
+			throw new Error(`Cannot resolve path: ${err.message}`)
+		}
+	}
+
+	const gitRoot = await getGitRoot()
+	if (realInputPath !== gitRoot && !realInputPath.startsWith(`${gitRoot}/`)) {
+		throw new Error(`Path outside repository: ${inputPath}`)
+	}
+
+	return realInputPath
+}
+
+/**
+ * Resolve a non-existent path by walking up to the nearest existing ancestor
+ * and applying realpath there, then re-appending the remaining segments.
+ *
+ * Why: a naive fallback to path.resolve on ENOENT misses intermediate symlinks
+ * that could escape the repository boundary.
+ */
+async function resolveNearestAncestor(resolvedPath: string): Promise<string> {
+	let dir = path.dirname(resolvedPath)
+	const suffix = path.basename(resolvedPath)
+	const segments: string[] = [suffix]
+
+	while (dir !== path.dirname(dir)) {
+		try {
+			const realDir = await realpath(dir)
+			return path.join(realDir, ...segments)
+		} catch {
+			segments.unshift(path.basename(dir))
+			dir = path.dirname(dir)
+		}
+	}
+
+	return resolvedPath
+}
+
+/**
+ * Validate shell pattern safety before passing it to bun test.
+ *
+ * Why: pattern arguments are command-adjacent input and need defense-in-depth
+ * against flag injection and shell meta-character abuse.
+ */
+export function validateShellSafePattern(pattern: string): void {
+	if (!pattern || pattern.trim() === '') {
+		throw new Error('Pattern cannot be empty')
+	}
+	if (hasShellUnsafeCharacters(pattern)) {
+		throw new Error(
+			`Pattern contains unsafe characters: ${JSON.stringify(pattern)}`,
+		)
+	}
+	if (pattern.startsWith('-')) {
+		throw new Error(
+			'Pattern must not start with a dash (prevents flag injection)',
+		)
+	}
+}
+
+function hasControlCharacters(value: string): boolean {
+	for (let index = 0; index < value.length; index += 1) {
+		const code = value.charCodeAt(index)
+		if (code <= 0x1f || code === 0x7f) {
+			return true
+		}
+	}
+	return false
+}
+
+function hasShellUnsafeCharacters(value: string): boolean {
+	const unsafe = new Set([';', '&', '|', '<', '>', '`', '$', '\\'])
+	for (let index = 0; index < value.length; index += 1) {
+		const char = value[index]
+		if (!char) {
+			continue
+		}
+		if (unsafe.has(char)) {
+			return true
+		}
+		const code = value.charCodeAt(index)
+		if (code <= 0x1f || code === 0x7f) {
+			return true
+		}
+	}
+	return false
+}
+
+function normalizeSummary(
+	summary: TestSummary,
+): z.infer<typeof testSummarySchema> {
+	return {
+		passed: summary.passed,
+		failed: summary.failed,
+		total: summary.total,
+		failures: summary.failures.map((failure: TestFailure) => ({
+			file: failure.file,
+			message: failure.message,
+			line: failure.line ?? null,
+			stack: failure.stack ?? null,
+		})),
+	}
+}
+
+async function spawnWithTimeout(
+	cmd: string[],
+	timeoutMs: number,
+	options?: {
+		env?: Record<string, string>
+	},
+): Promise<{
+	stdout: string
+	stderr: string
+	exitCode: number
+	timedOut: boolean
+}> {
+	const proc = Bun.spawn(cmd, {
+		env: options?.env,
+		stdout: 'pipe',
+		stderr: 'pipe',
+	})
+
+	let timedOut = false
+	let killTimer: ReturnType<typeof setTimeout> | undefined
+	const timeout = setTimeout(() => {
+		timedOut = true
+		proc.kill('SIGTERM')
+		killTimer = setTimeout(() => {
+			try {
+				proc.kill('SIGKILL')
+			} catch {}
+		}, 5_000)
+	}, timeoutMs)
+
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	])
+
+	clearTimeout(timeout)
+	if (killTimer) clearTimeout(killTimer)
+	return { stdout, stderr, exitCode, timedOut }
+}
+
+/**
+ * Run Bun tests and return structured summary.
+ *
+ * Why: test failures are diagnostic results, not tool failures, so callers need
+ * structured failure data even when tests fail.
+ */
+async function runBunTests(
+	pattern?: string,
+): Promise<z.infer<typeof testSummarySchema>> {
+	const cmd = pattern ? ['bun', 'test', '--', pattern] : ['bun', 'test']
 
 	const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
 		cmd,
-		TIMEOUT_MS,
-		{ env: { CI: 'true' } },
+		TEST_TIMEOUT_MS,
+		{ env: { ...process.env, CI: 'true' } },
 	)
 
-	// Check for timeout
 	if (timedOut) {
 		return {
 			passed: 0,
@@ -73,21 +294,19 @@ async function runBunTests(pattern?: string): Promise<TestSummary> {
 			failures: [
 				{
 					file: 'timeout',
+					line: null,
+					stack: null,
 					message:
-						'Tests timed out after 30 seconds. Possible causes: open handles, infinite loops, or watch mode accidentally enabled.',
+						'Tests timed out after 30 seconds. Possible causes: open handles, infinite loops, or accidental watch mode.',
 				},
 			],
 		}
 	}
 
-	// Combine stdout and stderr - bun test outputs results to stderr
 	const output = `${stdout}\n${stderr}`
-
-	// If exit code is 0, all tests passed
 	if (exitCode === 0) {
 		const passMatch = output.match(/(\d+) pass/)
 		const passed = passMatch?.[1] ? Number.parseInt(passMatch[1], 10) : 0
-
 		return {
 			passed,
 			failed: 0,
@@ -96,31 +315,19 @@ async function runBunTests(pattern?: string): Promise<TestSummary> {
 		}
 	}
 
-	// Parse failures from combined output
-	return parseBunTestOutput(output)
+	return normalizeSummary(parseBunTestOutput(output))
 }
 
-/**
- * Run Bun tests with coverage and parse output using spawnWithTimeout from core
- *
- * Uses `bun test --coverage` directly - Bun handles workspace discovery natively.
- */
-async function runBunTestCoverage(): Promise<{
-	summary: TestSummary
-	coverage: { percent: number; uncovered: string[] }
-}> {
-	const TIMEOUT_MS = 60000
-	const cmd = ['bun', 'test', '--coverage']
-
-	const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
-		cmd,
-		TIMEOUT_MS,
-		{ env: { CI: 'true' } },
+async function runBunTestCoverage(): Promise<
+	z.infer<typeof testCoverageSchema>
+> {
+	const { stdout, stderr, timedOut } = await spawnWithTimeout(
+		['bun', 'test', '--coverage'],
+		COVERAGE_TIMEOUT_MS,
+		{ env: { ...process.env, CI: 'true' } },
 	)
 
 	const output = `${stdout}\n${stderr}`
-
-	// Check for timeout
 	if (timedOut) {
 		return {
 			summary: {
@@ -130,6 +337,8 @@ async function runBunTestCoverage(): Promise<{
 				failures: [
 					{
 						file: 'timeout',
+						line: null,
+						stack: null,
 						message: 'Tests timed out after 60 seconds.',
 					},
 				],
@@ -138,26 +347,20 @@ async function runBunTestCoverage(): Promise<{
 		}
 	}
 
-	// Parse test results
-	const summary =
-		exitCode === 0 ? parseBunTestOutput(stdout) : parseBunTestOutput(output)
-
-	// Parse coverage from output (e.g., "Coverage: 85.5%")
+	const summary = normalizeSummary(parseBunTestOutput(output))
 	const coverageMatch = output.match(/(\d+(?:\.\d+)?)\s*%/)
 	const percent = coverageMatch?.[1] ? Number.parseFloat(coverageMatch[1]) : 0
 
-	// Find uncovered files (lines with 0% or low coverage)
 	const uncovered: string[] = []
-	const lines = output.split('\n')
-	for (const line of lines) {
-		// Match lines like "src/file.ts | 0.00% | ..."
+	for (const line of output.split('\n')) {
 		const match = line.match(/^([^\s|]+)\s*\|\s*(\d+(?:\.\d+)?)\s*%/)
-		if (match?.[1] && match[2]) {
-			const file = match[1].trim()
-			const fileCoverage = Number.parseFloat(match[2])
-			if (fileCoverage < 50 && file.endsWith('.ts')) {
-				uncovered.push(`${file} (${fileCoverage}%)`)
-			}
+		if (!match?.[1] || !match[2]) {
+			continue
+		}
+		const file = match[1].trim()
+		const fileCoverage = Number.parseFloat(match[2])
+		if (fileCoverage < 50 && file.endsWith('.ts')) {
+			uncovered.push(`${file} (${fileCoverage}%)`)
 		}
 	}
 
@@ -167,224 +370,266 @@ async function runBunTestCoverage(): Promise<{
 	}
 }
 
-// --- Formatters ---
-
-/**
- * Format test summary for display
- */
 function formatTestSummary(
-	summary: TestSummary,
-	format: ResponseFormat = ResponseFormat.MARKDOWN,
+	summary: z.infer<typeof testSummarySchema>,
+	format: 'markdown' | 'json',
 	context?: string,
 ): string {
-	if (format === ResponseFormat.JSON) {
-		return JSON.stringify({ ...summary, context }, null, 2)
+	if (format === 'json') {
+		return JSON.stringify({ ...summary, context })
 	}
 
 	if (summary.failed === 0) {
-		const ctx = context ? ` in ${context}` : ''
-		return `All ${summary.passed} tests passed${ctx}.`
+		return context
+			? `All ${summary.passed} tests passed in ${context}.`
+			: `All ${summary.passed} tests passed.`
 	}
 
 	let output = `${summary.failed} tests failed${context ? ` in ${context}` : ''} (${summary.passed} passed)\n\n`
-
-	summary.failures.forEach((f, i) => {
-		output += `${i + 1}. ${f.file}:${f.line || '?'}\n`
-		output += `   ${f.message.split('\n')[0]}\n`
-		if (f.stack) {
-			output += `${f.stack
+	for (let index = 0; index < summary.failures.length; index += 1) {
+		const failure = summary.failures[index]
+		if (!failure) {
+			continue
+		}
+		output += `${index + 1}. ${failure.file}:${failure.line ?? '?'}\n`
+		output += `   ${failure.message.split('\n')[0]}\n`
+		if (failure.stack) {
+			output += `${failure.stack
 				.split('\n')
-				.map((l) => `      ${l}`)
+				.map((line) => `      ${line}`)
 				.join('\n')}\n`
 		}
 		output += '\n'
-	})
+	}
+
+	return output.trim()
+}
+
+function formatCoverageResult(
+	result: z.infer<typeof testCoverageSchema>,
+	format: 'markdown' | 'json',
+): string {
+	if (format === 'json') {
+		return JSON.stringify(result)
+	}
+
+	let output =
+		result.summary.failed === 0
+			? `All ${result.summary.passed} tests passed.\n\n`
+			: `${result.summary.failed} tests failed (${result.summary.passed} passed)\n\n`
+
+	output += `Coverage: ${result.coverage.percent}%\n`
+
+	if (result.coverage.uncovered.length > 0) {
+		output += '\nFiles with low coverage (<50%):\n'
+		for (const file of result.coverage.uncovered) {
+			output += `   - ${file}\n`
+		}
+	}
 
 	return output.trim()
 }
 
 /**
- * Format coverage result for display
+ * Create the bun-runner MCP server.
+ *
+ * Why: factory construction isolates registration logic for in-memory
+ * integration tests and keeps stdio lifecycle wiring separate.
  */
-function formatCoverageResult(
-	summary: TestSummary,
-	coverage: { percent: number; uncovered: string[] },
-	format: ResponseFormat = ResponseFormat.MARKDOWN,
-): string {
-	if (format === ResponseFormat.JSON) {
-		return JSON.stringify({ summary, coverage }, null, 2)
-	}
+export function createBunServer(): McpServer {
+	const server = new McpServer({
+		name: 'bun-runner',
+		version: '1.0.3',
+	})
 
-	let output = ''
-
-	if (summary.failed === 0) {
-		output += `All ${summary.passed} tests passed.\n\n`
-	} else {
-		output += `${summary.failed} tests failed (${summary.passed} passed)\n\n`
-	}
-
-	output += `Coverage: ${coverage.percent}%\n`
-
-	if (coverage.uncovered.length > 0) {
-		output += '\nFiles with low coverage (<50%):\n'
-		coverage.uncovered.forEach((f) => {
-			output += `   - ${f}\n`
-		})
-	}
-
-	return output.trim()
-}
-
-// --- Tools ---
-
-tool(
-	'bun_runTests',
-	{
-		description:
-			"Run tests using Bun and return a concise summary of failures. Use this instead of 'bun test' to save tokens and get structured error reports.",
-		inputSchema: {
-			pattern: z
-				.string()
-				.optional()
-				.describe(
-					"File pattern or test name to filter tests (e.g., 'auth' or 'login.test.ts')",
-				),
-			response_format: z
-				.enum(['markdown', 'json'])
-				.optional()
-				.default('json')
-				.describe("Output format: 'markdown' or 'json' (default)"),
+	server.registerTool(
+		'bun_runTests',
+		{
+			title: 'Bun Test Runner',
+			description:
+				'Run Bun tests for suite-level regression checks. Returns pass/fail counts and structured failures. Read-only. No fixes or coverage. Use bun_testFile for one file; bun_testCoverage for coverage.',
+			inputSchema: z.object({
+				pattern: z
+					.string()
+					.max(4096)
+					.optional()
+					.describe(
+						"File pattern or test name to filter tests (e.g., 'auth' or 'login.test.ts')",
+					),
+				response_format: z
+					.enum(['markdown', 'json'])
+					.optional()
+					.default('json')
+					.describe("Output format: 'markdown' or 'json' (default)"),
+			}),
+			outputSchema: testSummarySchema,
+			annotations: {
+				readOnlyHint: true,
+				destructiveHint: false,
+				idempotentHint: true,
+				openWorldHint: false,
+			},
 		},
-		annotations: {
-			readOnlyHint: true,
-			destructiveHint: false,
-			idempotentHint: true,
-			openWorldHint: false,
-		},
-	},
-	wrapToolHandler(
-		async (args: Record<string, unknown>, format: ResponseFormat) => {
-			const { pattern } = args as { pattern?: string }
+		async (args): Promise<CallToolResult> => {
+			try {
+				const pattern = args.pattern
+				if (pattern) {
+					validateShellSafePattern(pattern)
+					if (pattern.includes('/') || pattern.includes('..')) {
+						await validatePath(pattern)
+					}
+				}
 
-			// Validate pattern for security
-			if (pattern) {
-				validateShellSafePattern(pattern)
-				// If pattern looks like a path, validate it stays in repo
-				if (pattern.includes('/') || pattern.includes('..')) {
-					await validatePath(pattern)
+				const summary = await runBunTests(pattern)
+				const format = args.response_format ?? 'json'
+				return {
+					isError: false,
+					content: [{ type: 'text', text: formatTestSummary(summary, format) }],
+					structuredContent: toStructured(summary),
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error)
+				return {
+					isError: true,
+					content: [{ type: 'text', text: `Error: ${message}` }],
 				}
 			}
-
-			const summary = await runBunTests(pattern)
-
-			// Format the response
-			const text = formatTestSummary(summary, format)
-
-			return text
 		},
+	)
+
+	server.registerTool(
+		'bun_testFile',
 		{
-			toolName: 'bun_runTests',
-			logger: createLoggerAdapter(mcpLogger),
-			createCid: createCorrelationId,
+			title: 'Bun Single File Test Runner',
+			description:
+				'Run Bun tests for one exact test file path with structured failures. Use during focused debugging. Read-only. Not full-suite or coverage. Use bun_runTests for suite checks; bun_testCoverage for coverage.',
+			inputSchema: z.object({
+				file: z
+					.string()
+					.max(4096)
+					.describe("Path to the test file to run (e.g., 'src/utils.test.ts')"),
+				response_format: z
+					.enum(['markdown', 'json'])
+					.optional()
+					.default('json')
+					.describe("Output format: 'markdown' or 'json' (default)"),
+			}),
+			outputSchema: testSummarySchema,
+			annotations: {
+				readOnlyHint: true,
+				destructiveHint: false,
+				idempotentHint: true,
+				openWorldHint: false,
+			},
 		},
-	),
-)
-
-tool(
-	'bun_testFile',
-	{
-		description:
-			'Run tests for a specific file only. More targeted than bun_runTests with a pattern.',
-		inputSchema: {
-			file: z
-				.string()
-				.describe("Path to the test file to run (e.g., 'src/utils.test.ts')"),
-			response_format: z
-				.enum(['markdown', 'json'])
-				.optional()
-				.default('json')
-				.describe("Output format: 'markdown' or 'json' (default)"),
+		async (args): Promise<CallToolResult> => {
+			try {
+				const validatedFile = await validatePath(args.file)
+				const summary = await runBunTests(validatedFile)
+				const format = args.response_format ?? 'json'
+				return {
+					isError: false,
+					content: [
+						{
+							type: 'text',
+							text: formatTestSummary(summary, format, args.file),
+						},
+					],
+					structuredContent: toStructured(summary),
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error)
+				return {
+					isError: true,
+					content: [{ type: 'text', text: `Error: ${message}` }],
+				}
+			}
 		},
-		annotations: {
-			readOnlyHint: true,
-			destructiveHint: false,
-			idempotentHint: true,
-			openWorldHint: false,
-		},
-	},
-	wrapToolHandler(
-		async (args: Record<string, unknown>, format: ResponseFormat) => {
-			const { file } = args as { file: string }
+	)
 
-			// Validate file path for security and get absolute path
-			const validatedFile = await validatePath(file)
-
-			const summary = await runBunTests(validatedFile)
-
-			// Format the response with file context
-			const text = formatTestSummary(summary, format, file)
-
-			return text
-		},
+	server.registerTool(
+		'bun_testCoverage',
 		{
-			toolName: 'bun_testFile',
-			logger: createLoggerAdapter(mcpLogger),
-			createCid: createCorrelationId,
+			title: 'Bun Test Coverage Reporter',
+			description:
+				'Run Bun tests with coverage. Returns test summary, coverage percent, and low-coverage files. Read-only and slower than bun_runTests. No fixes. Use bun_runTests for faster no-coverage checks.',
+			inputSchema: z.object({
+				response_format: z
+					.enum(['markdown', 'json'])
+					.optional()
+					.default('json')
+					.describe("Output format: 'markdown' or 'json' (default)"),
+			}),
+			outputSchema: testCoverageSchema,
+			annotations: {
+				readOnlyHint: true,
+				destructiveHint: false,
+				idempotentHint: true,
+				openWorldHint: false,
+			},
 		},
-	),
-)
+		async (args): Promise<CallToolResult> => {
+			try {
+				const result = await runBunTestCoverage()
+				const format = args.response_format ?? 'json'
+				return {
+					isError: false,
+					content: [
+						{ type: 'text', text: formatCoverageResult(result, format) },
+					],
+					structuredContent: toStructured(result),
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error)
+				return {
+					isError: true,
+					content: [{ type: 'text', text: `Error: ${message}` }],
+				}
+			}
+		},
+	)
 
-tool(
-	'bun_testCoverage',
-	{
-		description:
-			'Run tests with code coverage and return a summary. Shows overall coverage percentage and files with low coverage.',
-		inputSchema: {
-			response_format: z
-				.enum(['markdown', 'json'])
-				.optional()
-				.default('json')
-				.describe("Output format: 'markdown' or 'json' (default)"),
-		},
-		annotations: {
-			readOnlyHint: true,
-			destructiveHint: false,
-			idempotentHint: true,
-			openWorldHint: false,
-		},
-	},
-	wrapToolHandler(
-		async (_args: Record<string, unknown>, format: ResponseFormat) => {
-			const { summary, coverage } = await runBunTestCoverage()
+	return server
+}
 
-			// Format the response
-			const text = formatCoverageResult(summary, coverage, format)
+/**
+ * Start the stdio MCP server process.
+ */
+export async function startBunServer(): Promise<void> {
+	const server = createBunServer()
+	const transport = new StdioServerTransport()
+	let shuttingDown = false
 
-			return text
-		},
-		{
-			toolName: 'bun_testCoverage',
-			logger: createLoggerAdapter(mcpLogger),
-			createCid: createCorrelationId,
-		},
-	),
-)
+	const shutdown = async () => {
+		if (shuttingDown) {
+			return
+		}
+		shuttingDown = true
+		await server.close()
+		process.exit(0)
+	}
+
+	transport.onclose = () => {
+		void shutdown()
+	}
+
+	await server.connect(transport)
+	process.stdin.resume()
+
+	process.on('SIGINT', () => {
+		void shutdown()
+	})
+	process.on('SIGTERM', () => {
+		void shutdown()
+	})
+}
 
 /**
  * Re-export types and parsing function from parse-utils for hook reuse.
- * These are used by bun-test.ts and bun-test-ci.ts hooks.
  */
 export type { TestFailure, TestSummary }
 export { parseBunTestOutput }
 
-// Only start the server when run directly, not when imported by tests
 if (import.meta.main) {
-	startServer('bun-runner', {
-		version: '1.0.0',
-		fileLogging: {
-			enabled: true,
-			subsystems: ['mcp'],
-			level: 'info',
-		},
-	})
+	void startBunServer()
 }
