@@ -9,12 +9,29 @@
  * and reports errors in a Claude-friendly format.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { readFileSync } from 'node:fs'
 import { access, realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
+import {
+	configureSync,
+	dispose,
+	fingersCrossed,
+	getLogger,
+	getStreamSink,
+	jsonLinesFormatter,
+	type LogLevel,
+	type LogRecord,
+	type Sink,
+	withContext,
+} from '@logtape/logtape'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import {
+	type CallToolResult,
+	type LoggingLevel,
+	SetLevelRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 
 /**
@@ -47,6 +64,27 @@ const TOOL_ERROR_CODES = [
 ] as const
 
 type ToolErrorCode = (typeof TOOL_ERROR_CODES)[number]
+const DEFAULT_MCP_LOG_LEVEL: LoggingLevel = 'warning'
+
+const MCP_LOG_LEVEL_SEVERITY: Record<LoggingLevel, number> = {
+	debug: 7,
+	info: 6,
+	notice: 5,
+	warning: 4,
+	error: 3,
+	critical: 2,
+	alert: 1,
+	emergency: 0,
+}
+
+const LOGTAPE_TO_MCP_LEVEL: Record<LogLevel, LoggingLevel> = {
+	trace: 'debug',
+	debug: 'debug',
+	info: 'info',
+	warning: 'warning',
+	error: 'error',
+	fatal: 'critical',
+}
 
 export interface TscError {
 	file: string
@@ -108,6 +146,14 @@ class TscToolError extends Error {
 		this.code = code
 		this.remediationHint = remediationHint
 	}
+}
+
+interface ObservabilityState {
+	clientMcpLogLevel: LoggingLevel
+}
+
+interface TscServerOptions {
+	stderrStream?: WritableStream
 }
 
 /**
@@ -608,6 +654,122 @@ function toToolFailure(error: unknown): ToolFailure {
 	}
 }
 
+function createBunStderrWritableStream(): WritableStream {
+	let writer: ReturnType<(typeof Bun.stderr)['writer']> | null = null
+
+	return new WritableStream({
+		start() {
+			writer = Bun.stderr.writer()
+		},
+		write(chunk: Uint8Array | string) {
+			if (!writer) {
+				return
+			}
+			if (typeof chunk === 'string') {
+				writer.write(new TextEncoder().encode(chunk))
+				return
+			}
+			writer.write(chunk)
+		},
+		close() {
+			writer = null
+		},
+		abort() {
+			writer = null
+		},
+	})
+}
+
+function shouldForwardMcpLog(
+	recordLevel: LogLevel,
+	clientLevel: LoggingLevel,
+): boolean {
+	const mcpLevel = LOGTAPE_TO_MCP_LEVEL[recordLevel]
+	return MCP_LOG_LEVEL_SEVERITY[mcpLevel] <= MCP_LOG_LEVEL_SEVERITY[clientLevel]
+}
+
+function stringifyLogMessage(parts: readonly unknown[]): string {
+	return parts.map((part) => String(part)).join('')
+}
+
+function createMcpProtocolSink(
+	server: McpServer,
+	state: ObservabilityState,
+): Sink {
+	return (record: LogRecord): void => {
+		if (!server.isConnected()) {
+			return
+		}
+		if (!shouldForwardMcpLog(record.level, state.clientMcpLogLevel)) {
+			return
+		}
+
+		void server.sendLoggingMessage({
+			level: LOGTAPE_TO_MCP_LEVEL[record.level],
+			logger: record.category.join('.'),
+			data: {
+				message: stringifyLogMessage(record.message),
+				properties: record.properties,
+			},
+		})
+	}
+}
+
+/**
+ * Configure local observability sinks for this MCP server.
+ *
+ * Why: stdout must stay MCP-protocol-only, so we emit operator logs to stderr
+ * JSONL and client-visible logs via notifications/message with explicit level
+ * gating and request-scoped context isolation.
+ */
+function setupObservability(
+	server: McpServer,
+	state: ObservabilityState,
+	options?: TscServerOptions,
+): void {
+	const stderrSink = getStreamSink(
+		options?.stderrStream ?? createBunStderrWritableStream(),
+		{
+			formatter: jsonLinesFormatter,
+		},
+	)
+
+	const bufferedStderrSink = fingersCrossed(stderrSink, {
+		triggerLevel: 'warning',
+		maxBufferSize: 200,
+		isolateByCategory: 'descendant',
+		isolateByContext: {
+			keys: ['requestId'],
+			maxContexts: 50,
+			bufferTtlMs: 60_000,
+			cleanupIntervalMs: 30_000,
+		},
+	})
+
+	const mcpProtocolSink = createMcpProtocolSink(server, state)
+
+	configureSync({
+		reset: true,
+		contextLocalStorage: new AsyncLocalStorage<Record<string, unknown>>(),
+		sinks: {
+			stderrBuffered: bufferedStderrSink,
+			mcpProtocol: mcpProtocolSink,
+		},
+		loggers: [
+			{
+				category: ['mcp'],
+				sinks: ['stderrBuffered', 'mcpProtocol'],
+				lowestLevel: 'debug',
+			},
+			{
+				category: ['logtape'],
+				sinks: ['stderrBuffered'],
+				lowestLevel: 'error',
+			},
+		],
+	})
+}
+
 /**
  * Format tsc errors as human-readable markdown with per-error diagnostics.
  *
@@ -632,11 +794,37 @@ export function formatTscMarkdown(output: TscOutput): string {
  * Why: factory construction keeps transport wiring out of tests so integration
  * coverage can use InMemoryTransport.
  */
-export function createTscServer(): McpServer {
-	const server = new McpServer({
-		name: 'tsc-runner',
-		version: SERVER_VERSION,
-	})
+export function createTscServer(options?: TscServerOptions): McpServer {
+	const observabilityState: ObservabilityState = {
+		clientMcpLogLevel: DEFAULT_MCP_LOG_LEVEL,
+	}
+
+	const server = new McpServer(
+		{
+			name: 'tsc-runner',
+			version: SERVER_VERSION,
+		},
+		{
+			capabilities: {
+				logging: {},
+			},
+		},
+	)
+	setupObservability(server, observabilityState, options)
+
+	const lifecycleLogger = getLogger(['mcp', 'lifecycle'])
+	const toolLogger = getLogger(['mcp', 'tools', 'tsc_check'])
+
+	server.server.setRequestHandler(
+		SetLevelRequestSchema,
+		async (request): Promise<Record<string, never>> => {
+			observabilityState.clientMcpLogLevel = request.params.level
+			toolLogger.info('Updated MCP logging level', {
+				mcpLevel: request.params.level,
+			})
+			return {}
+		},
+	)
 
 	server.registerTool(
 		'tsc_check',
@@ -666,39 +854,69 @@ export function createTscServer(): McpServer {
 				openWorldHint: false,
 			},
 		},
-		async (args): Promise<CallToolResult> => {
-			try {
-				const { cwd, configPath } = await resolveWorkdir(args.path)
-				const output = await runTsc(cwd, configPath)
-				const format = args.response_format ?? 'json'
+		async (args, extra): Promise<CallToolResult> => {
+			return withContext(
+				{
+					requestId: String(extra.requestId),
+					tool: 'tsc_check',
+				},
+				async () => {
+					toolLogger.debug('Received tsc_check call', {
+						path: args.path ?? null,
+						responseFormat: args.response_format ?? 'json',
+					})
 
-				const text =
-					format === 'json'
-						? JSON.stringify(output)
-						: output.exitCode === 0 || output.errorCount === 0
-							? `TypeScript passed (cwd: ${output.cwd})`
-							: formatTscMarkdown(output)
+					try {
+						const { cwd, configPath } = await resolveWorkdir(args.path)
+						const output = await runTsc(cwd, configPath)
+						const format = args.response_format ?? 'json'
 
-				return {
-					isError: false,
-					content: [{ type: 'text', text }],
-					structuredContent: toStructured(output),
-				}
-			} catch (error) {
-				const failure = toToolFailure(error)
-				return {
-					isError: true,
-					content: [
-						{
-							type: 'text',
-							text: `${failure.code}: ${failure.message}${failure.remediationHint ? `\n${failure.remediationHint}` : ''}`,
-						},
-					],
-					structuredContent: toStructured(failure),
-				}
-			}
+						const text =
+							format === 'json'
+								? JSON.stringify(output)
+								: output.exitCode === 0 || output.errorCount === 0
+									? `TypeScript passed (cwd: ${output.cwd})`
+									: formatTscMarkdown(output)
+
+						toolLogger.info('tsc_check completed', {
+							cwd: output.cwd,
+							configPath: output.configPath,
+							exitCode: output.exitCode,
+							errorCount: output.errorCount,
+						})
+
+						return {
+							isError: false,
+							content: [{ type: 'text', text }],
+							structuredContent: toStructured(output),
+						}
+					} catch (error) {
+						const failure = toToolFailure(error)
+						toolLogger.error('tsc_check failed', {
+							code: failure.code,
+							message: failure.message,
+							remediationHint: failure.remediationHint ?? null,
+						})
+						return {
+							isError: true,
+							content: [
+								{
+									type: 'text',
+									text: `${failure.code}: ${failure.message}${failure.remediationHint ? `\n${failure.remediationHint}` : ''}`,
+								},
+							],
+							structuredContent: toStructured(failure),
+						}
+					}
+				},
+			)
 		},
 	)
+
+	lifecycleLogger.info('tsc-runner server initialized', {
+		version: SERVER_VERSION,
+		defaultMcpLogLevel: observabilityState.clientMcpLogLevel,
+	})
 
 	return server
 }
@@ -712,12 +930,21 @@ export async function startTscServer(): Promise<void> {
 	const server = createTscServer()
 	const transport = new StdioServerTransport()
 	let shuttingDown = false
+	const lifecycleLogger = getLogger(['mcp', 'lifecycle'])
 
 	const shutdown = async () => {
 		if (shuttingDown) {
 			return
 		}
 		shuttingDown = true
+		lifecycleLogger.info('Shutting down tsc-runner server')
+		try {
+			await dispose()
+		} catch (error) {
+			lifecycleLogger.error('Failed to dispose logger sinks cleanly', {
+				error: error instanceof Error ? error.message : String(error),
+			})
+		}
 		await server.close()
 		process.exit(0)
 	}
@@ -727,6 +954,7 @@ export async function startTscServer(): Promise<void> {
 	}
 
 	await server.connect(transport)
+	lifecycleLogger.info('tsc-runner server connected to stdio transport')
 	process.stdin.resume()
 
 	process.on('SIGINT', () => {
