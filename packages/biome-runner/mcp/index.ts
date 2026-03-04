@@ -47,8 +47,8 @@ export interface LintDiagnostic {
 }
 
 export interface LintSummary {
-	error_count: number
-	warning_count: number
+	errorCount: number
+	warningCount: number
 	diagnostics: LintDiagnostic[]
 }
 
@@ -80,18 +80,18 @@ export function parseBiomeOutput(stdout: string): LintSummary {
 		const summary = report.summary || {}
 
 		return {
-			error_count:
+			errorCount:
 				summary.errors ??
 				diagnostics.filter((d) => d.severity === 'error').length,
-			warning_count:
+			warningCount:
 				summary.warnings ??
 				diagnostics.filter((d) => d.severity === 'warning').length,
 			diagnostics,
 		}
 	} catch (_e) {
 		return {
-			error_count: 1,
-			warning_count: 0,
+			errorCount: 1,
+			warningCount: 0,
 			diagnostics: [
 				{
 					file: 'unknown',
@@ -265,11 +265,11 @@ function formatLintSummary(
 		return JSON.stringify(summary, null, 2)
 	}
 
-	if (summary.error_count === 0 && summary.warning_count === 0) {
+	if (summary.errorCount === 0 && summary.warningCount === 0) {
 		return 'No linting issues found.'
 	}
 
-	let output = `Found ${summary.error_count} errors and ${summary.warning_count} warnings:\n\n`
+	let output = `Found ${summary.errorCount} errors and ${summary.warningCount} warnings:\n\n`
 
 	summary.diagnostics.forEach((d) => {
 		const icon = d.severity === 'error' ? '[error]' : '[warn]'
@@ -302,14 +302,14 @@ function formatLintFixResult(
 		output += `Fixed ${fixed} issue(s)\n\n`
 	}
 
-	if (remaining.error_count === 0 && remaining.warning_count === 0) {
+	if (remaining.errorCount === 0 && remaining.warningCount === 0) {
 		if (fixed === 0) {
 			return 'No issues to fix.'
 		}
 		return `${output}All issues resolved.`.trim()
 	}
 
-	output += `${remaining.error_count} error(s) and ${remaining.warning_count} warning(s) remain:\n\n`
+	output += `${remaining.errorCount} error(s) and ${remaining.warningCount} warning(s) remain:\n\n`
 
 	remaining.diagnostics.forEach((d) => {
 		const icon = d.severity === 'error' ? '[error]' : '[warn]'
@@ -329,7 +329,7 @@ function formatFormatCheckResult(
 	format: ResponseFormat,
 ): string {
 	if (format === ResponseFormat.JSON) {
-		return JSON.stringify({ formatted, unformatted_files: files }, null, 2)
+		return JSON.stringify({ formatted, unformattedFiles: files }, null, 2)
 	}
 
 	if (formatted) {

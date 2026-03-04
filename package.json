@@ -28,6 +28,9 @@
 	"workspaces": [
 		"packages/*"
 	],
+	"overrides": {
+		"@modelcontextprotocol/sdk": "1.27.1"
+	},
 	"scripts": {
 		"build": "bun run --filter '*' build",
 		"check": "biome check --write .",

@@ -1,0 +1,2200 @@
+{
+	"createdAt": "2026-03-04T04:22:06.368Z",
+	"model": "gpt-4.1-mini",
+	"repeats": 5,
+	"temperature": 0.2,
+	"suite": "stress",
+	"promptCount": 22,
+	"variants": {
+		"current": [
+			{
+				"name": "tsc_check",
+				"title": "TypeScript Type Checker"
+			},
+			{
+				"name": "bun_runTests",
+				"title": "Bun Test Runner"
+			},
+			{
+				"name": "bun_testFile",
+				"title": "Bun Single File Test Runner"
+			},
+			{
+				"name": "bun_testCoverage",
+				"title": "Bun Test Coverage Reporter"
+			},
+			{
+				"name": "biome_lintCheck",
+				"title": "Biome Lint Checker"
+			},
+			{
+				"name": "biome_lintFix",
+				"title": "Biome Lint & Format Fixer"
+			},
+			{
+				"name": "biome_formatCheck",
+				"title": "Biome Format Checker"
+			}
+		],
+		"halfCut": [
+			{
+				"name": "tsc_check",
+				"title": "TypeScript Type Checker"
+			},
+			{
+				"name": "bun_runTests",
+				"title": "Bun Test Runner"
+			},
+			{
+				"name": "bun_testFile",
+				"title": "Bun Single File Test Runner"
+			},
+			{
+				"name": "bun_testCoverage",
+				"title": "Bun Test Coverage Reporter"
+			},
+			{
+				"name": "biome_lintCheck",
+				"title": "Biome Lint Checker"
+			},
+			{
+				"name": "biome_lintFix",
+				"title": "Biome Lint & Format Fixer"
+			},
+			{
+				"name": "biome_formatCheck",
+				"title": "Biome Format Checker"
+			}
+		]
+	},
+	"metrics": {
+		"byVariant": {
+			"current": {
+				"trials": 110,
+				"firstChoiceAccuracy": 0.9090909090909091,
+				"firstCorrect": 100,
+				"secondCorrectOnly": 10,
+				"miss": 0,
+				"meanExtraCalls": 0.09090909090909091,
+				"confusionPairs": [
+					{
+						"pair": "biome_formatCheck vs biome_lintCheck",
+						"trials": 15,
+						"correct": 15,
+						"accuracy": 1
+					},
+					{
+						"pair": "biome_formatCheck vs biome_lintFix",
+						"trials": 5,
+						"correct": 5,
+						"accuracy": 1
+					},
+					{
+						"pair": "biome_lintCheck vs biome_lintFix",
+						"trials": 10,
+						"correct": 10,
+						"accuracy": 1
+					},
+					{
+						"pair": "biome_lintFix vs biome_formatCheck",
+						"trials": 10,
+						"correct": 5,
+						"accuracy": 0.5
+					},
+					{
+						"pair": "biome_lintFix vs biome_lintCheck",
+						"trials": 10,
+						"correct": 10,
+						"accuracy": 1
+					},
+					{
+						"pair": "bun_runTests vs bun_testCoverage",
+						"trials": 10,
+						"correct": 10,
+						"accuracy": 1
+					},
+					{
+						"pair": "bun_runTests vs bun_testFile",
+						"trials": 5,
+						"correct": 0,
+						"accuracy": 0
+					},
+					{
+						"pair": "bun_testCoverage vs bun_runTests",
+						"trials": 15,
+						"correct": 15,
+						"accuracy": 1
+					},
+					{
+						"pair": "bun_testFile vs bun_runTests",
+						"trials": 15,
+						"correct": 15,
+						"accuracy": 1
+					},
+					{
+						"pair": "tsc_check vs biome_lintCheck",
+						"trials": 15,
+						"correct": 15,
+						"accuracy": 1
+					}
+				]
+			},
+			"half-cut": {
+				"trials": 110,
+				"firstChoiceAccuracy": 0.9727272727272728,
+				"firstCorrect": 107,
+				"secondCorrectOnly": 3,
+				"miss": 0,
+				"meanExtraCalls": 0.02727272727272727,
+				"confusionPairs": [
+					{
+						"pair": "biome_formatCheck vs biome_lintCheck",
+						"trials": 15,
+						"correct": 15,
+						"accuracy": 1
+					},
+					{
+						"pair": "biome_formatCheck vs biome_lintFix",
+						"trials": 5,
+						"correct": 5,
+						"accuracy": 1
+					},
+					{
+						"pair": "biome_lintCheck vs biome_lintFix",
+						"trials": 10,
+						"correct": 10,
+						"accuracy": 1
+					},
+					{
+						"pair": "biome_lintFix vs biome_formatCheck",
+						"trials": 10,
+						"correct": 9,
+						"accuracy": 0.9
+					},
+					{
+						"pair": "biome_lintFix vs biome_lintCheck",
+						"trials": 10,
+						"correct": 10,
+						"accuracy": 1
+					},
+					{
+						"pair": "bun_runTests vs bun_testCoverage",
+						"trials": 10,
+						"correct": 10,
+						"accuracy": 1
+					},
+					{
+						"pair": "bun_runTests vs bun_testFile",
+						"trials": 5,
+						"correct": 3,
+						"accuracy": 0.6
+					},
+					{
+						"pair": "bun_testCoverage vs bun_runTests",
+						"trials": 15,
+						"correct": 15,
+						"accuracy": 1
+					},
+					{
+						"pair": "bun_testFile vs bun_runTests",
+						"trials": 15,
+						"correct": 15,
+						"accuracy": 1
+					},
+					{
+						"pair": "tsc_check vs biome_lintCheck",
+						"trials": 15,
+						"correct": 15,
+						"accuracy": 1
+					}
+				]
+			}
+		},
+		"delta": {
+			"firstChoiceAccuracy": 0.06363636363636371,
+			"meanExtraCalls": -0.06363636363636364
+		}
+	},
+	"rows": [
+		{
+			"variant": "current",
+			"promptId": "P01",
+			"prompt": "Check types before commit",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P01",
+			"prompt": "Check types before commit",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P01",
+			"prompt": "Check types before commit",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P01",
+			"prompt": "Check types before commit",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P01",
+			"prompt": "Check types before commit",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P02",
+			"prompt": "Fix lint and formatting in src",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P02",
+			"prompt": "Fix lint and formatting in src",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P02",
+			"prompt": "Fix lint and formatting in src",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P02",
+			"prompt": "Fix lint and formatting in src",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P02",
+			"prompt": "Fix lint and formatting in src",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P03",
+			"prompt": "Only check lint, do not change files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P03",
+			"prompt": "Only check lint, do not change files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P03",
+			"prompt": "Only check lint, do not change files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P03",
+			"prompt": "Only check lint, do not change files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P03",
+			"prompt": "Only check lint, do not change files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P04",
+			"prompt": "Which files are unformatted?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P04",
+			"prompt": "Which files are unformatted?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P04",
+			"prompt": "Which files are unformatted?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P04",
+			"prompt": "Which files are unformatted?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P04",
+			"prompt": "Which files are unformatted?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P05",
+			"prompt": "Run all tests quickly",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P05",
+			"prompt": "Run all tests quickly",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P05",
+			"prompt": "Run all tests quickly",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P05",
+			"prompt": "Run all tests quickly",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P05",
+			"prompt": "Run all tests quickly",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P06",
+			"prompt": "Run tests for src/auth/login.test.ts only",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P06",
+			"prompt": "Run tests for src/auth/login.test.ts only",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P06",
+			"prompt": "Run tests for src/auth/login.test.ts only",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P06",
+			"prompt": "Run tests for src/auth/login.test.ts only",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P06",
+			"prompt": "Run tests for src/auth/login.test.ts only",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P07",
+			"prompt": "Give me coverage before release",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P07",
+			"prompt": "Give me coverage before release",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P07",
+			"prompt": "Give me coverage before release",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P07",
+			"prompt": "Give me coverage before release",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P07",
+			"prompt": "Give me coverage before release",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P08",
+			"prompt": "Type errors only, no lint",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "P08",
+			"prompt": "Type errors only, no lint",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "P08",
+			"prompt": "Type errors only, no lint",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "P08",
+			"prompt": "Type errors only, no lint",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "P08",
+			"prompt": "Type errors only, no lint",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "P09",
+			"prompt": "Auto-fix style issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P09",
+			"prompt": "Auto-fix style issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P09",
+			"prompt": "Auto-fix style issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P09",
+			"prompt": "Auto-fix style issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P09",
+			"prompt": "Auto-fix style issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "P10",
+			"prompt": "Read-only formatting gate for CI",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintFix",
+			"first": "biome_formatCheck",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P10",
+			"prompt": "Read-only formatting gate for CI",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintFix",
+			"first": "biome_formatCheck",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P10",
+			"prompt": "Read-only formatting gate for CI",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintFix",
+			"first": "biome_formatCheck",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P10",
+			"prompt": "Read-only formatting gate for CI",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintFix",
+			"first": "biome_formatCheck",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "P10",
+			"prompt": "Read-only formatting gate for CI",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintFix",
+			"first": "biome_formatCheck",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S01",
+			"prompt": "quickly run tests for the whole repo, no coverage",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S01",
+			"prompt": "quickly run tests for the whole repo, no coverage",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S01",
+			"prompt": "quickly run tests for the whole repo, no coverage",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S01",
+			"prompt": "quickly run tests for the whole repo, no coverage",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S01",
+			"prompt": "quickly run tests for the whole repo, no coverage",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S02",
+			"prompt": "run only tests in packages/bun-runner/mcp/index.test.ts",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S02",
+			"prompt": "run only tests in packages/bun-runner/mcp/index.test.ts",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S02",
+			"prompt": "run only tests in packages/bun-runner/mcp/index.test.ts",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S02",
+			"prompt": "run only tests in packages/bun-runner/mcp/index.test.ts",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S02",
+			"prompt": "run only tests in packages/bun-runner/mcp/index.test.ts",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S03",
+			"prompt": "what is our test coverage right now?",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S03",
+			"prompt": "what is our test coverage right now?",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S03",
+			"prompt": "what is our test coverage right now?",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S03",
+			"prompt": "what is our test coverage right now?",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S03",
+			"prompt": "what is our test coverage right now?",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S04",
+			"prompt": "lint this package but do not touch files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S04",
+			"prompt": "lint this package but do not touch files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S04",
+			"prompt": "lint this package but do not touch files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S04",
+			"prompt": "lint this package but do not touch files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S04",
+			"prompt": "lint this package but do not touch files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "current",
+			"promptId": "S05",
+			"prompt": "rewrite files to fix lint issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S05",
+			"prompt": "rewrite files to fix lint issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S05",
+			"prompt": "rewrite files to fix lint issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S05",
+			"prompt": "rewrite files to fix lint issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S05",
+			"prompt": "rewrite files to fix lint issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S06",
+			"prompt": "check style formatting only in read-only mode",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S06",
+			"prompt": "check style formatting only in read-only mode",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S06",
+			"prompt": "check style formatting only in read-only mode",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S06",
+			"prompt": "check style formatting only in read-only mode",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S06",
+			"prompt": "check style formatting only in read-only mode",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S07",
+			"prompt": "validate types only, skip lint and tests",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "S07",
+			"prompt": "validate types only, skip lint and tests",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S07",
+			"prompt": "validate types only, skip lint and tests",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S07",
+			"prompt": "validate types only, skip lint and tests",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S07",
+			"prompt": "validate types only, skip lint and tests",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "S08",
+			"prompt": "fix formatting drift before merge",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintFix"
+		},
+		{
+			"variant": "current",
+			"promptId": "S08",
+			"prompt": "fix formatting drift before merge",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintFix"
+		},
+		{
+			"variant": "current",
+			"promptId": "S08",
+			"prompt": "fix formatting drift before merge",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintFix"
+		},
+		{
+			"variant": "current",
+			"promptId": "S08",
+			"prompt": "fix formatting drift before merge",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintFix"
+		},
+		{
+			"variant": "current",
+			"promptId": "S08",
+			"prompt": "fix formatting drift before merge",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintFix"
+		},
+		{
+			"variant": "current",
+			"promptId": "S09",
+			"prompt": "which files violate formatting rules?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S09",
+			"prompt": "which files violate formatting rules?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S09",
+			"prompt": "which files violate formatting rules?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S09",
+			"prompt": "which files violate formatting rules?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S09",
+			"prompt": "which files violate formatting rules?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S10",
+			"prompt": "full test run after refactor",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testFile",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "S10",
+			"prompt": "full test run after refactor",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testFile",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "S10",
+			"prompt": "full test run after refactor",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testFile",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "S10",
+			"prompt": "full test run after refactor",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testFile",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "S10",
+			"prompt": "full test run after refactor",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testFile",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "S11",
+			"prompt": "run coverage pass for release notes",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S11",
+			"prompt": "run coverage pass for release notes",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S11",
+			"prompt": "run coverage pass for release notes",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S11",
+			"prompt": "run coverage pass for release notes",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S11",
+			"prompt": "run coverage pass for release notes",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "current",
+			"promptId": "S12",
+			"prompt": "targeted test rerun for one failing file path",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "S12",
+			"prompt": "targeted test rerun for one failing file path",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "S12",
+			"prompt": "targeted test rerun for one failing file path",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "S12",
+			"prompt": "targeted test rerun for one failing file path",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "current",
+			"promptId": "S12",
+			"prompt": "targeted test rerun for one failing file path",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P01",
+			"prompt": "Check types before commit",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P01",
+			"prompt": "Check types before commit",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P01",
+			"prompt": "Check types before commit",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P01",
+			"prompt": "Check types before commit",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P01",
+			"prompt": "Check types before commit",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P02",
+			"prompt": "Fix lint and formatting in src",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P02",
+			"prompt": "Fix lint and formatting in src",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P02",
+			"prompt": "Fix lint and formatting in src",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P02",
+			"prompt": "Fix lint and formatting in src",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P02",
+			"prompt": "Fix lint and formatting in src",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P03",
+			"prompt": "Only check lint, do not change files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P03",
+			"prompt": "Only check lint, do not change files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P03",
+			"prompt": "Only check lint, do not change files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P03",
+			"prompt": "Only check lint, do not change files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P03",
+			"prompt": "Only check lint, do not change files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P04",
+			"prompt": "Which files are unformatted?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P04",
+			"prompt": "Which files are unformatted?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P04",
+			"prompt": "Which files are unformatted?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P04",
+			"prompt": "Which files are unformatted?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P04",
+			"prompt": "Which files are unformatted?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P05",
+			"prompt": "Run all tests quickly",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "bun_testCoverage"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P05",
+			"prompt": "Run all tests quickly",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "bun_testCoverage"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P05",
+			"prompt": "Run all tests quickly",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "bun_testCoverage"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P05",
+			"prompt": "Run all tests quickly",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "bun_testCoverage"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P05",
+			"prompt": "Run all tests quickly",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "bun_testCoverage"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P06",
+			"prompt": "Run tests for src/auth/login.test.ts only",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P06",
+			"prompt": "Run tests for src/auth/login.test.ts only",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P06",
+			"prompt": "Run tests for src/auth/login.test.ts only",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P06",
+			"prompt": "Run tests for src/auth/login.test.ts only",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P06",
+			"prompt": "Run tests for src/auth/login.test.ts only",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P07",
+			"prompt": "Give me coverage before release",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P07",
+			"prompt": "Give me coverage before release",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P07",
+			"prompt": "Give me coverage before release",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P07",
+			"prompt": "Give me coverage before release",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P07",
+			"prompt": "Give me coverage before release",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P08",
+			"prompt": "Type errors only, no lint",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P08",
+			"prompt": "Type errors only, no lint",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P08",
+			"prompt": "Type errors only, no lint",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P08",
+			"prompt": "Type errors only, no lint",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P08",
+			"prompt": "Type errors only, no lint",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P09",
+			"prompt": "Auto-fix style issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P09",
+			"prompt": "Auto-fix style issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P09",
+			"prompt": "Auto-fix style issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P09",
+			"prompt": "Auto-fix style issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P09",
+			"prompt": "Auto-fix style issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P10",
+			"prompt": "Read-only formatting gate for CI",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintFix",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P10",
+			"prompt": "Read-only formatting gate for CI",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintFix",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P10",
+			"prompt": "Read-only formatting gate for CI",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintFix",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P10",
+			"prompt": "Read-only formatting gate for CI",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintFix",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "P10",
+			"prompt": "Read-only formatting gate for CI",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintFix",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S01",
+			"prompt": "quickly run tests for the whole repo, no coverage",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S01",
+			"prompt": "quickly run tests for the whole repo, no coverage",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S01",
+			"prompt": "quickly run tests for the whole repo, no coverage",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S01",
+			"prompt": "quickly run tests for the whole repo, no coverage",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S01",
+			"prompt": "quickly run tests for the whole repo, no coverage",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testCoverage",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S02",
+			"prompt": "run only tests in packages/bun-runner/mcp/index.test.ts",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S02",
+			"prompt": "run only tests in packages/bun-runner/mcp/index.test.ts",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S02",
+			"prompt": "run only tests in packages/bun-runner/mcp/index.test.ts",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S02",
+			"prompt": "run only tests in packages/bun-runner/mcp/index.test.ts",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S02",
+			"prompt": "run only tests in packages/bun-runner/mcp/index.test.ts",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S03",
+			"prompt": "what is our test coverage right now?",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S03",
+			"prompt": "what is our test coverage right now?",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S03",
+			"prompt": "what is our test coverage right now?",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S03",
+			"prompt": "what is our test coverage right now?",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S03",
+			"prompt": "what is our test coverage right now?",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S04",
+			"prompt": "lint this package but do not touch files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S04",
+			"prompt": "lint this package but do not touch files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S04",
+			"prompt": "lint this package but do not touch files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S04",
+			"prompt": "lint this package but do not touch files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S04",
+			"prompt": "lint this package but do not touch files",
+			"expected": "biome_lintCheck",
+			"confusionPair": "biome_lintCheck vs biome_lintFix",
+			"first": "biome_lintCheck",
+			"second": "biome_formatCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S05",
+			"prompt": "rewrite files to fix lint issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S05",
+			"prompt": "rewrite files to fix lint issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S05",
+			"prompt": "rewrite files to fix lint issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S05",
+			"prompt": "rewrite files to fix lint issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S05",
+			"prompt": "rewrite files to fix lint issues",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_lintCheck",
+			"first": "biome_lintFix",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S06",
+			"prompt": "check style formatting only in read-only mode",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S06",
+			"prompt": "check style formatting only in read-only mode",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S06",
+			"prompt": "check style formatting only in read-only mode",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S06",
+			"prompt": "check style formatting only in read-only mode",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S06",
+			"prompt": "check style formatting only in read-only mode",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S07",
+			"prompt": "validate types only, skip lint and tests",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S07",
+			"prompt": "validate types only, skip lint and tests",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S07",
+			"prompt": "validate types only, skip lint and tests",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S07",
+			"prompt": "validate types only, skip lint and tests",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S07",
+			"prompt": "validate types only, skip lint and tests",
+			"expected": "tsc_check",
+			"confusionPair": "tsc_check vs biome_lintCheck",
+			"first": "tsc_check",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S08",
+			"prompt": "fix formatting drift before merge",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S08",
+			"prompt": "fix formatting drift before merge",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S08",
+			"prompt": "fix formatting drift before merge",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintFix"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S08",
+			"prompt": "fix formatting drift before merge",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S08",
+			"prompt": "fix formatting drift before merge",
+			"expected": "biome_lintFix",
+			"confusionPair": "biome_lintFix vs biome_formatCheck",
+			"first": "biome_lintFix",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S09",
+			"prompt": "which files violate formatting rules?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S09",
+			"prompt": "which files violate formatting rules?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S09",
+			"prompt": "which files violate formatting rules?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S09",
+			"prompt": "which files violate formatting rules?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S09",
+			"prompt": "which files violate formatting rules?",
+			"expected": "biome_formatCheck",
+			"confusionPair": "biome_formatCheck vs biome_lintCheck",
+			"first": "biome_formatCheck",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S10",
+			"prompt": "full test run after refactor",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testFile",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S10",
+			"prompt": "full test run after refactor",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testFile",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S10",
+			"prompt": "full test run after refactor",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testFile",
+			"first": "bun_runTests",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S10",
+			"prompt": "full test run after refactor",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testFile",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S10",
+			"prompt": "full test run after refactor",
+			"expected": "bun_runTests",
+			"confusionPair": "bun_runTests vs bun_testFile",
+			"first": "tsc_check",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S11",
+			"prompt": "run coverage pass for release notes",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S11",
+			"prompt": "run coverage pass for release notes",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S11",
+			"prompt": "run coverage pass for release notes",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S11",
+			"prompt": "run coverage pass for release notes",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S11",
+			"prompt": "run coverage pass for release notes",
+			"expected": "bun_testCoverage",
+			"confusionPair": "bun_testCoverage vs bun_runTests",
+			"first": "bun_testCoverage",
+			"second": "biome_lintCheck"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S12",
+			"prompt": "targeted test rerun for one failing file path",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S12",
+			"prompt": "targeted test rerun for one failing file path",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "bun_runTests"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S12",
+			"prompt": "targeted test rerun for one failing file path",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S12",
+			"prompt": "targeted test rerun for one failing file path",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "tsc_check"
+		},
+		{
+			"variant": "half-cut",
+			"promptId": "S12",
+			"prompt": "targeted test rerun for one failing file path",
+			"expected": "bun_testFile",
+			"confusionPair": "bun_testFile vs bun_runTests",
+			"first": "bun_testFile",
+			"second": "bun_runTests"
+		}
+	]
+}

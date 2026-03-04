@@ -6,8 +6,8 @@ describe('parseBiomeOutput', () => {
 		const result = parseBiomeOutput(
 			JSON.stringify({ diagnostics: [], summary: { errors: 0, warnings: 0 } }),
 		)
-		expect(result.error_count).toBe(0)
-		expect(result.warning_count).toBe(0)
+		expect(result.errorCount).toBe(0)
+		expect(result.warningCount).toBe(0)
 		expect(result.diagnostics).toHaveLength(0)
 	})
 
@@ -25,7 +25,7 @@ describe('parseBiomeOutput', () => {
 				summary: { errors: 1, warnings: 0 },
 			}),
 		)
-		expect(result.error_count).toBe(1)
+		expect(result.errorCount).toBe(1)
 		expect(result.diagnostics).toHaveLength(1)
 		expect(result.diagnostics[0]?.file).toBe('src/index.ts')
 		expect(result.diagnostics[0]?.code).toBe('lint/suspicious/noDoubleEquals')
@@ -33,7 +33,7 @@ describe('parseBiomeOutput', () => {
 
 	test('handles invalid JSON gracefully', () => {
 		const result = parseBiomeOutput('not json')
-		expect(result.error_count).toBe(1)
+		expect(result.errorCount).toBe(1)
 		expect(result.diagnostics[0]?.code).toBe('internal_error')
 	})
 })

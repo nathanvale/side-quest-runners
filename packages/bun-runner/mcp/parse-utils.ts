@@ -144,7 +144,11 @@ function parseFailureDetails(output: string): TestFailure[] {
 	// For legacy format (✗ or FAIL), push remaining failure
 	// For v1.3+ format, orphan failures without (fail) marker are discarded
 	// as they're likely console.error output
-	if (currentFailure && (currentFailure.message.includes('✗') || currentFailure.message.startsWith('FAIL '))) {
+	if (
+		currentFailure &&
+		(currentFailure.message.includes('✗') ||
+			currentFailure.message.startsWith('FAIL '))
+	) {
 		failures.push(currentFailure)
 	}
 
