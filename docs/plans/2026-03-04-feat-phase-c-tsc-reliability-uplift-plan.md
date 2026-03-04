@@ -70,10 +70,10 @@ Detect common corruption signatures (truncated JSON, missing version field) and 
 - [ ] `.tsbuildinfo` corruption detected and surfaced with remediation hint
 - [ ] No silent parse failures in any test scenario
 - [ ] Timeout/config/path errors correctly categorized
-- [ ] Each change is a discrete, revertable commit
+- [ ] Each change is a discrete, revertible commit
 
 ## Sources
 
 - **Origin brainstorm:** [docs/brainstorms/2026-03-04-tsc-runner-uplift.md](../brainstorms/2026-03-04-tsc-runner-uplift.md) -- Phase C definition
-- **Research:** [tsc incremental + Bun subprocess patterns](https://github.com/user/side-quest-marketplace/docs/research/2026-03-03-tsc-incremental-bun-subprocess-patterns.md)
+- **Research:** docs/research/2026-03-03-tsc-incremental-bun-subprocess-patterns.md (side-quest-marketplace repo)
 - GitHub Issues: #32, #33

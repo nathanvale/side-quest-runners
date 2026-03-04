@@ -6,9 +6,9 @@ tags: [mcp, tsc-runner, bun-runner, biome-runner, prompt-engineering, output-sch
 project: dx-tsc-runner
 status: complete
 builds-on:
-  - /Users/nathanvale/code/side-quest-marketplace/docs/research/2026-03-03-mcp-best-practices-prompt-engineering.md
-  - /Users/nathanvale/code/side-quest-marketplace/docs/research/2026-03-03-tsc-incremental-bun-subprocess-patterns.md
-  - /Users/nathanvale/code/side-quest-marketplace/docs/research/2026-03-04-logtape-mcp-server-observability.md
+  - side-quest-marketplace: docs/research/2026-03-03-mcp-best-practices-prompt-engineering.md
+  - side-quest-marketplace: docs/research/2026-03-03-tsc-incremental-bun-subprocess-patterns.md
+  - side-quest-marketplace: docs/research/2026-03-04-logtape-mcp-server-observability.md
 reviewed-by: staff-engineering-opinion (2026-03-04)
 ---
 
@@ -255,8 +255,8 @@ Mitigation:
 
 - [MCP Tools spec (2025-06-18)](https://modelcontextprotocol.io/docs/concepts/tools) -- `title`, `outputSchema`
 - [MCP Logging spec (2025-03-26)](https://modelcontextprotocol.io/specification/2025-03-26/server/utilities/logging)
-- [MCP best practices research](/Users/nathanvale/code/side-quest-marketplace/docs/research/2026-03-03-mcp-best-practices-prompt-engineering.md)
-- [tsc incremental + Bun subprocess research](/Users/nathanvale/code/side-quest-marketplace/docs/research/2026-03-03-tsc-incremental-bun-subprocess-patterns.md)
-- [LogTape MCP observability research](/Users/nathanvale/code/side-quest-marketplace/docs/research/2026-03-04-logtape-mcp-server-observability.md)
+- [MCP best practices research](https://github.com/nathanvale/side-quest-marketplace/blob/main/docs/research/2026-03-03-mcp-best-practices-prompt-engineering.md)
+- [tsc incremental + Bun subprocess research](https://github.com/nathanvale/side-quest-marketplace/blob/main/docs/research/2026-03-03-tsc-incremental-bun-subprocess-patterns.md)
+- [LogTape MCP observability research](https://github.com/nathanvale/side-quest-marketplace/blob/main/docs/research/2026-03-04-logtape-mcp-server-observability.md)
 - `@side-quest/core@0.1.1` source audit
 - Staff engineering review (2026-03-04)

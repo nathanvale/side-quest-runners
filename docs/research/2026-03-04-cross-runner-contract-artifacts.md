@@ -13,7 +13,7 @@ todo: "002"
 
 Prompt-engineering artifacts for all 7 MCP tools across 3 runners. Each tool gets a `title`, improved `description` (what/when/returns/boundaries), `outputSchema`, and audited annotations. Ready for copy-paste into implementation.
 
-Reference: [MCP best practices research](/Users/nathanvale/code/side-quest-marketplace/docs/research/2026-03-03-mcp-best-practices-prompt-engineering.md)
+Reference: [MCP best practices research](https://github.com/nathanvale/side-quest-marketplace/blob/main/docs/research/2026-03-03-mcp-best-practices-prompt-engineering.md)
 
 ---
 
@@ -44,7 +44,7 @@ Reference: [MCP best practices research](/Users/nathanvale/code/side-quest-marke
 
 Every description follows this structure:
 
-```
+```text
 WHAT:       One sentence - what the tool does (verb-object opening).
 WHEN:       When to use it (and cross-tool disambiguation).
 RETURNS:    What the output contains.
@@ -73,7 +73,7 @@ Sources:
 
 ### Current
 
-```
+```text
 Run TypeScript type checking (tsc --noEmit) using the nearest tsconfig/jsconfig.
 ```
 
@@ -83,7 +83,7 @@ Run TypeScript type checking (tsc --noEmit) using the nearest tsconfig/jsconfig.
 
 **description:**
 
-```
+```text
 Type-check TS/JS with tsc --noEmit using nearest tsconfig/jsconfig. Use after edits. Returns errorCount and file/line/column/message diagnostics. Read-only. Not for lint/format/tests; use biome_lintCheck or bun_runTests.
 ```
 
@@ -167,7 +167,7 @@ Status: already correct, no change needed.
 
 ### Current
 
-```
+```text
 Run tests using Bun and return a concise summary of failures. Use this instead of 'bun test' to save tokens and get structured error reports.
 ```
 
@@ -177,7 +177,7 @@ Run tests using Bun and return a concise summary of failures. Use this instead o
 
 **description:**
 
-```
+```text
 Run Bun tests for suite-level regression checks. Returns pass/fail counts and structured failures. Read-only. No fixes or coverage. Use bun_testFile for one file; bun_testCoverage for coverage.
 ```
 
@@ -260,7 +260,7 @@ Status: already correct.
 
 ### Current
 
-```
+```text
 Run tests for a specific file only. More targeted than bun_runTests with a pattern.
 ```
 
@@ -270,7 +270,7 @@ Run tests for a specific file only. More targeted than bun_runTests with a patte
 
 **description:**
 
-```
+```text
 Run Bun tests for one exact test file path with structured failures. Use during focused debugging. Read-only. Not full-suite or coverage. Use bun_runTests for suite checks; bun_testCoverage for coverage.
 ```
 
@@ -303,7 +303,7 @@ Same as `bun_runTests` -- reuse the same schema. In implementation, extract a sh
 
 ### Current
 
-```
+```text
 Run tests with code coverage and return a summary. Shows overall coverage percentage and files with low coverage.
 ```
 
@@ -313,7 +313,7 @@ Run tests with code coverage and return a summary. Shows overall coverage percen
 
 **description:**
 
-```
+```text
 Run Bun tests with coverage. Returns test summary, coverage percent, and low-coverage files. Read-only and slower than bun_runTests. No fixes. Use bun_runTests for faster no-coverage checks.
 ```
 
@@ -390,7 +390,7 @@ Status: already correct.
 
 ### Current
 
-```
+```text
 Run Biome linter on files and return structured errors. Use this to check for code quality issues without fixing them.
 ```
 
@@ -400,7 +400,7 @@ Run Biome linter on files and return structured errors. Use this to check for co
 
 **description:**
 
-```
+```text
 Check files with Biome and return lint/format diagnostics without writing changes. Use after edits. Read-only. No fixes or type checks. Use biome_lintFix to fix; use tsc_check for types.
 ```
 
@@ -475,7 +475,7 @@ Status: already correct.
 
 ### Current
 
-```
+```text
 Run Biome linter with --write to auto-fix issues. Returns count of fixed issues and any remaining unfixable errors.
 ```
 
@@ -485,7 +485,7 @@ Run Biome linter with --write to auto-fix issues. Returns count of fixed issues 
 
 **description:**
 
-```
+```text
 Auto-fix Biome lint/format issues with --write, then return remaining diagnostics. Use after biome_lintCheck. Modifies files. No type checks. Use biome_lintCheck for read-only checks; use tsc_check for types.
 ```
 
@@ -554,7 +554,7 @@ Status: already correct.
 
 ### Current
 
-```
+```text
 Check if files are properly formatted without making changes. Returns list of unformatted files.
 ```
 
@@ -564,7 +564,7 @@ Check if files are properly formatted without making changes. Returns list of un
 
 **description:**
 
-```
+```text
 Check Biome formatting compliance and list unformatted files. Use for CI/pre-commit format gates. Read-only. No fixes or type checks. Use biome_lintFix to fix formatting; biome_lintCheck for lint diagnostics.
 ```
 
@@ -767,4 +767,4 @@ No workflow-shaped tools, no agent-as-router pattern, no defensive tool design, 
 - [Claude Code ignores structuredContent - zenn.dev](https://zenn.dev/7shi/articles/20250710-output-schema?locale=en)
 - [GitHub issue #654 - structuredContent blocks error reporting](https://github.com/modelcontextprotocol/typescript-sdk/issues/654)
 - [GitHub issue #1308 - outputSchema validation crashes with optional](https://github.com/modelcontextprotocol/typescript-sdk/issues/1308)
-- [MCP best practices research (internal)](/Users/nathanvale/code/side-quest-marketplace/docs/research/2026-03-03-mcp-best-practices-prompt-engineering.md)
+- [MCP best practices research (internal)](https://github.com/nathanvale/side-quest-marketplace/blob/main/docs/research/2026-03-03-mcp-best-practices-prompt-engineering.md)

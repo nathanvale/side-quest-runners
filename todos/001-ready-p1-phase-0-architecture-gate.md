@@ -83,7 +83,7 @@ To be filled during triage.
 ## Resources
 
 - [MCP Tools spec (2025-06-18)](https://modelcontextprotocol.io/docs/concepts/tools)
-- [Brainstorm doc](/Users/nathanvale/code/side-quest-runners/docs/brainstorms/2026-03-04-tsc-runner-uplift.md)
+- [Brainstorm doc](docs/brainstorms/2026-03-04-tsc-runner-uplift.md)
 - `@side-quest/core@0.1.1` source audit
 
 ## Acceptance Criteria

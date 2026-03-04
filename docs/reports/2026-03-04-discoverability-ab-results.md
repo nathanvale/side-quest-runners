@@ -16,7 +16,7 @@ Tool execution was **not** invoked. This benchmark measures tool-selection quali
 
 ## How It Was Measured
 
-- Harness: [scripts/discoverability/eval-ab.ts](/Users/nathanvale/code/side-quest-runners/scripts/discoverability/eval-ab.ts)
+- Harness: [scripts/discoverability/eval-ab.ts](scripts/discoverability/eval-ab.ts)
 - Router: OpenAI chat completions (`gpt-4.1-mini`)
 - Output per trial: ranked picks (`first`, `second`) from allowed tool names
 - Metrics:
@@ -26,8 +26,8 @@ Tool execution was **not** invoked. This benchmark measures tool-selection quali
 
 Reports:
 
-- [reports/discoverability-ab-core.json](/Users/nathanvale/code/side-quest-runners/reports/discoverability-ab-core.json)
-- [reports/discoverability-ab-stress.json](/Users/nathanvale/code/side-quest-runners/reports/discoverability-ab-stress.json)
+- [reports/discoverability-ab-core.json](reports/discoverability-ab-core.json)
+- [reports/discoverability-ab-stress.json](reports/discoverability-ab-stress.json)
 
 ## Results
 

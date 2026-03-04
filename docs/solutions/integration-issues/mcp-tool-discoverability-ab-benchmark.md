@@ -9,9 +9,9 @@ category: integration-issues
 symptom: "Description compression had no proof discoverability would hold"
 root_cause: "Token metrics were used as a proxy for routing quality without a live-model selection benchmark"
 related:
-  - /Users/nathanvale/code/side-quest-runners/docs/research/2026-03-04-token-bloat-discoverability-cross-check.md
-  - /Users/nathanvale/code/side-quest-runners/docs/research/2026-03-04-cross-runner-contract-artifacts.md
-  - /Users/nathanvale/code/side-quest-runners/docs/reports/2026-03-04-discoverability-ab-results.md
+  - docs/research/2026-03-04-token-bloat-discoverability-cross-check.md
+  - docs/research/2026-03-04-cross-runner-contract-artifacts.md
+  - docs/reports/2026-03-04-discoverability-ab-results.md
 ---
 
 # MCP Tool Discoverability Validation with A/B Routing Benchmark
@@ -37,7 +37,7 @@ Those are correlated but not equivalent. Discoverability is a model behavior pro
 ### 1. Built a real A/B evaluator
 
 Added a harness at:
-- `/Users/nathanvale/code/side-quest-runners/scripts/discoverability/eval-ab.ts`
+- `scripts/discoverability/eval-ab.ts`
 
 It compares two variants:
 - `current` descriptions (from runner code)
@@ -62,14 +62,14 @@ bun scripts/discoverability/eval-ab.ts --suite=stress --repeats=5 --temperature=
 ```
 
 Reports produced:
-- `/Users/nathanvale/code/side-quest-runners/reports/discoverability-ab-core.json`
-- `/Users/nathanvale/code/side-quest-runners/reports/discoverability-ab-stress.json`
-- `/Users/nathanvale/code/side-quest-runners/docs/reports/2026-03-04-discoverability-ab-results.md`
+- `reports/discoverability-ab-core.json`
+- `reports/discoverability-ab-stress.json`
+- `docs/reports/2026-03-04-discoverability-ab-results.md`
 
 ### 3. Baked validated text into contract artifacts
 
 Applied half-cut descriptions into:
-- `/Users/nathanvale/code/side-quest-runners/docs/research/2026-03-04-cross-runner-contract-artifacts.md`
+- `docs/research/2026-03-04-cross-runner-contract-artifacts.md`
 
 ## Results
 

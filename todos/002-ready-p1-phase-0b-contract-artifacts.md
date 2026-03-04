@@ -63,7 +63,7 @@ To be filled during triage.
 - `packages/biome-runner/mcp/index.ts` -- 3 tool registrations
 
 **Description pattern (what/when/returns/boundaries):**
-```
+```text
 WHAT: Check TypeScript files for type errors using tsc --noEmit.
 WHEN: Use after editing .ts/.tsx files to verify type safety.
 RETURNS: Structured JSON with file, line, col, code, and message for each error.
@@ -77,9 +77,9 @@ BOUNDARIES: Read-only. Does NOT fix errors -- only reports them. Does NOT run te
 
 ## Resources
 
-- [MCP best practices research](/Users/nathanvale/code/side-quest-marketplace/docs/research/2026-03-03-mcp-best-practices-prompt-engineering.md)
+- [MCP best practices research](https://github.com/nathanvale/side-quest-marketplace/blob/main/docs/research/2026-03-03-mcp-best-practices-prompt-engineering.md)
 - [MCP Tools spec (2025-06-18)](https://modelcontextprotocol.io/docs/concepts/tools) -- `title`, `outputSchema`
-- [Brainstorm doc](/Users/nathanvale/code/side-quest-runners/docs/brainstorms/2026-03-04-tsc-runner-uplift.md)
+- [Brainstorm doc](docs/brainstorms/2026-03-04-tsc-runner-uplift.md)
 
 ## Acceptance Criteria
 

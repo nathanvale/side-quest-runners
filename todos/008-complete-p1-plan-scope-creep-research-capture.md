@@ -146,6 +146,6 @@ Phase A deliverables embedded in Phase 0 acceptance criteria prevent Phase 0 fro
 
 ## Resources
 
-- [Phase 0 plan](docs/plans/2026-03-04-feat-phase-0-architecture-gate-plan.md) -- the document under review
-- [Phase 0 todo](todos/001-ready-p1-phase-0-architecture-gate.md) -- original 108-line scope
-- [Phase A todo](todos/003-ready-p1-phase-a-foundation.md) -- downstream phase that should own extracted items
+- [Phase 0 plan](../docs/plans/2026-03-04-feat-phase-0-architecture-gate-plan.md) -- the document under review
+- [Phase 0 todo](./001-ready-p1-phase-0-architecture-gate.md) -- original 108-line scope
+- [Phase A todo](./003-ready-p1-phase-a-foundation.md) -- downstream phase that should own extracted items

@@ -285,7 +285,7 @@ Phase A and fix-while-migrating items are tracked in todos 003-007 and 008-022. 
 
 ### Origin
 
-- **Brainstorm document:** [docs/brainstorms/2026-03-04-tsc-runner-uplift.md](docs/brainstorms/2026-03-04-tsc-runner-uplift.md) -- Key decisions: (1) core dependency is a gate; (2) logging moves in-repo regardless; (3) tsc-runner is proving ground
+- **Brainstorm document:** [docs/brainstorms/2026-03-04-tsc-runner-uplift.md](../brainstorms/2026-03-04-tsc-runner-uplift.md) -- Key decisions: (1) core dependency is a gate; (2) logging moves in-repo regardless; (3) tsc-runner is proving ground
 
 ### Internal References
 

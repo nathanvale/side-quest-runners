@@ -87,7 +87,7 @@ return text  // always return -- failures are diagnostic data, not tool errors
 
 ## Resources
 
-- [Contract artifacts research doc](/Users/nathanvale/code/side-quest-runners/docs/research/2026-03-04-cross-runner-contract-artifacts.md) -- "Implementation Actions Required" section
+- [Contract artifacts research doc](docs/research/2026-03-04-cross-runner-contract-artifacts.md) -- "Implementation Actions Required" section
 - [MCP SDK issue #654](https://github.com/modelcontextprotocol/typescript-sdk/issues/654) -- outputSchema vs isError ordering
 - `packages/tsc-runner/mcp/index.ts` -- reference for correct pattern (returns structured JSON for both success and error)
 
