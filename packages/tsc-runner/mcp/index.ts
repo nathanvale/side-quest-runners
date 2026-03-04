@@ -16,11 +16,43 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 
+/**
+ * Bridge Zod-inferred output types to the SDK's Record<string, unknown>.
+ *
+ * Why: CallToolResult.structuredContent is typed as Record<string, unknown>,
+ * but our explicit interfaces have concrete keys that TypeScript considers
+ * structurally incompatible. This helper centralizes the unavoidable cast.
+ */
+function toStructured(value: object): Record<string, unknown> {
+	return value as Record<string, unknown>
+}
+
 /** Valid TypeScript configuration file names */
 const TSC_CONFIG_FILES = ['tsconfig.json', 'jsconfig.json'] as const
 const TSC_TIMEOUT_MS = 30_000
 
-const tscOutputSchema = z.object({
+export interface TscError {
+	file: string
+	line: number
+	col: number
+	message: string
+}
+
+export interface TscOutput {
+	cwd: string
+	configPath: string
+	timedOut: boolean
+	exitCode: number
+	errors: TscError[]
+	errorCount: number
+}
+
+export interface TscParseResult {
+	errorCount: number
+	errors: TscError[]
+}
+
+const tscOutputSchema: z.ZodType<TscOutput> = z.object({
 	cwd: z.string(),
 	configPath: z.string(),
 	timedOut: z.boolean(),
@@ -35,20 +67,6 @@ const tscOutputSchema = z.object({
 	),
 	errorCount: z.number(),
 })
-
-type TscOutput = z.infer<typeof tscOutputSchema>
-
-export interface TscError {
-	file: string
-	line: number
-	col: number
-	message: string
-}
-
-export interface TscParseResult {
-	errorCount: number
-	errors: TscError[]
-}
 
 let _gitRootPromise: Promise<string> | null = null
 
@@ -447,7 +465,7 @@ export function createTscServer(): McpServer {
 				return {
 					isError: false,
 					content: [{ type: 'text', text }],
-					structuredContent: output,
+					structuredContent: toStructured(output),
 				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error)
