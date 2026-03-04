@@ -3,7 +3,7 @@ status: ready
 priority: p1
 issue_id: "004"
 tags: [mcp, tsc-runner, prompt-engineering, outputSchema, contract]
-dependencies: ["002", "003"]
+dependencies: ["002", "002b", "003"]
 ---
 
 # Phase B: tsc-runner Contract Uplift

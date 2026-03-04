@@ -140,9 +140,7 @@ async function runBunTestCoverage(): Promise<{
 
 	// Parse test results
 	const summary =
-		exitCode === 0
-			? parseBunTestOutput(stdout)
-			: parseBunTestOutput(output)
+		exitCode === 0 ? parseBunTestOutput(stdout) : parseBunTestOutput(output)
 
 	// Parse coverage from output (e.g., "Coverage: 85.5%")
 	const coverageMatch = output.match(/(\d+(?:\.\d+)?)\s*%/)
@@ -282,14 +280,6 @@ tool(
 			// Format the response
 			const text = formatTestSummary(summary, format)
 
-			// If tests failed, mark as error by throwing
-			if (summary.failed > 0) {
-				const error = new Error(text)
-				// Attach summary for structured logging
-				;(error as Error & { summary?: TestSummary }).summary = summary
-				throw error
-			}
-
 			return text
 		},
 		{
@@ -334,14 +324,6 @@ tool(
 			// Format the response with file context
 			const text = formatTestSummary(summary, format, file)
 
-			// If tests failed, mark as error by throwing
-			if (summary.failed > 0) {
-				const error = new Error(text)
-				// Attach summary for structured logging
-				;(error as Error & { summary?: TestSummary }).summary = summary
-				throw error
-			}
-
 			return text
 		},
 		{
@@ -377,19 +359,6 @@ tool(
 
 			// Format the response
 			const text = formatCoverageResult(summary, coverage, format)
-
-			// If tests failed, mark as error by throwing
-			if (summary.failed > 0) {
-				const error = new Error(text)
-				// Attach summary and coverage for structured logging
-				;(
-					error as Error & { summary?: TestSummary; coverage?: typeof coverage }
-				).summary = summary
-				;(
-					error as Error & { summary?: TestSummary; coverage?: typeof coverage }
-				).coverage = coverage
-				throw error
-			}
 
 			return text
 		},
