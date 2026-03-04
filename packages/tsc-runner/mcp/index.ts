@@ -31,6 +31,22 @@ function toStructured(value: object): Record<string, unknown> {
 /** Valid TypeScript configuration file names */
 const TSC_CONFIG_FILES = ['tsconfig.json', 'jsconfig.json'] as const
 const TSC_TIMEOUT_MS = 30_000
+const TSC_ENV_ALLOWLIST = [
+	'PATH',
+	'HOME',
+	'NODE_PATH',
+	'BUN_INSTALL',
+	'TMPDIR',
+] as const
+
+const TOOL_ERROR_CODES = [
+	'CONFIG_NOT_FOUND',
+	'TIMEOUT',
+	'SPAWN_FAILURE',
+	'PATH_NOT_FOUND',
+] as const
+
+type ToolErrorCode = (typeof TOOL_ERROR_CODES)[number]
 
 export interface TscError {
 	file: string
@@ -47,6 +63,9 @@ export interface TscOutput {
 	exitCode: number
 	errors: TscError[]
 	errorCount: number
+	parseWarning?: string
+	rawStderr?: string
+	remediationHint?: string
 }
 
 export interface TscParseResult {
@@ -69,7 +88,27 @@ const tscOutputSchema: z.ZodType<TscOutput> = z.object({
 		}),
 	),
 	errorCount: z.number(),
+	parseWarning: z.string().optional(),
+	rawStderr: z.string().optional(),
+	remediationHint: z.string().optional(),
 })
+
+interface ToolFailure {
+	code: ToolErrorCode
+	message: string
+	remediationHint?: string
+}
+
+class TscToolError extends Error {
+	code: ToolErrorCode
+	remediationHint?: string
+
+	constructor(code: ToolErrorCode, message: string, remediationHint?: string) {
+		super(message)
+		this.code = code
+		this.remediationHint = remediationHint
+	}
+}
 
 /**
  * Resolve package version from package.json at module load.
@@ -307,7 +346,7 @@ async function resolveWorkdir(targetPath?: string): Promise<{
 	const resolved = await validatePathOrDefault(targetPath)
 
 	if (!(await fileExists(resolved))) {
-		throw new Error(`Path not found: ${resolved}`)
+		throw new TscToolError('PATH_NOT_FOUND', `Path not found: ${resolved}`)
 	}
 
 	const fileStat = await stat(resolved)
@@ -325,7 +364,8 @@ async function resolveWorkdir(targetPath?: string): Promise<{
 			return { cwd: nearest.configDir, configPath: nearest.configPath }
 		}
 
-		throw new Error(
+		throw new TscToolError(
+			'CONFIG_NOT_FOUND',
 			`No tsconfig.json or jsconfig.json found for directory ${resolved}`,
 		)
 	}
@@ -335,7 +375,8 @@ async function resolveWorkdir(targetPath?: string): Promise<{
 		return { cwd: nearest.configDir, configPath: nearest.configPath }
 	}
 
-	throw new Error(
+	throw new TscToolError(
+		'CONFIG_NOT_FOUND',
 		`No tsconfig.json or jsconfig.json found for file ${resolved}`,
 	)
 }
@@ -353,12 +394,22 @@ async function spawnWithTimeout(
 	exitCode: number
 	timedOut: boolean
 }> {
-	const proc = Bun.spawn(cmd, {
-		cwd: options?.cwd,
-		env: options?.env,
-		stdout: 'pipe',
-		stderr: 'pipe',
-	})
+	const proc = (() => {
+		try {
+			return Bun.spawn(cmd, {
+				cwd: options?.cwd,
+				env: options?.env,
+				stdout: 'pipe',
+				stderr: 'pipe',
+			})
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error)
+			throw new TscToolError(
+				'SPAWN_FAILURE',
+				`Failed to start TypeScript compiler: ${message}`,
+			)
+		}
+	})()
 
 	let timedOut = false
 	let killTimer: ReturnType<typeof setTimeout> | undefined
@@ -384,23 +435,176 @@ async function spawnWithTimeout(
 }
 
 async function runTsc(cwd: string, configPath: string): Promise<TscOutput> {
+	const invocation = createTscInvocation(configPath)
+
 	const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
-		['bunx', 'tsc', '--noEmit', '--pretty', 'false'],
+		invocation.cmd,
 		TSC_TIMEOUT_MS,
 		{
 			cwd,
-			env: { ...process.env, CI: 'true' },
+			env: invocation.env,
 		},
 	)
 
-	const parsed = parseTscOutput(`${stdout}${stderr}`)
-	return {
+	if (timedOut) {
+		throw new TscToolError(
+			'TIMEOUT',
+			`TypeScript check timed out after ${TSC_TIMEOUT_MS / 1000}s in ${cwd}.`,
+		)
+	}
+
+	const lowerStderr = stderr.toLowerCase()
+	if (
+		exitCode !== 0 &&
+		(lowerStderr.includes('command not found') ||
+			lowerStderr.includes('not recognized') ||
+			lowerStderr.includes('bunx: could not determine executable to run') ||
+			lowerStderr.includes('enoent'))
+	) {
+		throw new TscToolError(
+			'SPAWN_FAILURE',
+			`Failed to start TypeScript compiler from ${cwd}: ${stderr.trim()}`,
+		)
+	}
+
+	return buildTscOutput({
 		cwd,
 		configPath,
-		timedOut,
+		stdout,
+		stderr,
 		exitCode,
+		timedOut,
+	})
+}
+
+/**
+ * Build the exact `tsc` invocation command and sanitized environment.
+ *
+ * Why: reliability and security behavior (incremental mode + env allowlist)
+ * should be testable without running subprocesses.
+ */
+export function createTscInvocation(configPath: string): {
+	cmd: string[]
+	env: Record<string, string>
+} {
+	const env: Record<string, string> = { CI: 'true' }
+	for (const key of TSC_ENV_ALLOWLIST) {
+		const value = process.env[key]
+		if (typeof value === 'string' && value.length > 0) {
+			env[key] = value
+		}
+	}
+
+	return {
+		cmd: [
+			'bunx',
+			'tsc',
+			'--noEmit',
+			'--pretty',
+			'false',
+			'--incremental',
+			'--project',
+			configPath,
+		],
+		env,
+	}
+}
+
+/**
+ * Convert raw compiler process outputs into structured `tsc_check` output.
+ *
+ * Why: parser fallback and corruption hinting are pure transformation logic
+ * that should be deterministic and unit-testable.
+ */
+export function buildTscOutput(args: {
+	cwd: string
+	configPath: string
+	stdout: string
+	stderr: string
+	exitCode: number
+	timedOut: boolean
+}): TscOutput {
+	const parsed = parseTscOutput(`${args.stdout}${args.stderr}`)
+	const corruptionHint = detectTsBuildInfoCorruption(
+		`${args.stdout}\n${args.stderr}`,
+	)
+	if (args.exitCode !== 0 && parsed.errorCount === 0) {
+		const fallbackMessage =
+			args.stderr.trim() || args.stdout.trim() || 'No stderr output captured'
+		const parseWarning =
+			'TypeScript exited non-zero, but diagnostics could not be parsed from compiler output.'
+		return {
+			cwd: args.cwd,
+			configPath: args.configPath,
+			timedOut: args.timedOut,
+			exitCode: args.exitCode,
+			errors: [
+				{
+					file: args.configPath,
+					line: 1,
+					col: 1,
+					code: 'TS_PARSE_FALLBACK',
+					message: `${parseWarning} Raw stderr: ${fallbackMessage}`,
+				},
+			],
+			errorCount: 1,
+			parseWarning,
+			rawStderr: fallbackMessage,
+			remediationHint: corruptionHint ?? undefined,
+		}
+	}
+
+	return {
+		cwd: args.cwd,
+		configPath: args.configPath,
+		timedOut: args.timedOut,
+		exitCode: args.exitCode,
 		errors: parsed.errors,
 		errorCount: parsed.errorCount,
+		remediationHint: corruptionHint ?? undefined,
+	}
+}
+
+/**
+ * Detect probable TypeScript incremental cache corruption signatures.
+ *
+ * Why: concurrent `tsc --incremental` runs can leave damaged `.tsbuildinfo`
+ * files; surfacing a remediation hint reduces repeat failures.
+ */
+export function detectTsBuildInfoCorruption(output: string): string | null {
+	const normalized = output.toLowerCase()
+	if (!normalized.includes('.tsbuildinfo')) {
+		return null
+	}
+
+	if (
+		normalized.includes('unexpected end of json input') ||
+		normalized.includes('unterminated string in json') ||
+		normalized.includes(
+			"cannot read properties of undefined (reading 'version')",
+		) ||
+		normalized.includes("cannot read property 'version' of undefined") ||
+		normalized.includes("property 'version' is missing")
+	) {
+		return 'Possible .tsbuildinfo corruption detected. Delete .tsbuildinfo and retry.'
+	}
+
+	return null
+}
+
+function toToolFailure(error: unknown): ToolFailure {
+	if (error instanceof TscToolError) {
+		return {
+			code: error.code,
+			message: error.message,
+			remediationHint: error.remediationHint,
+		}
+	}
+
+	const message = error instanceof Error ? error.message : String(error)
+	return {
+		code: 'SPAWN_FAILURE',
+		message,
 	}
 }
 
@@ -471,11 +675,9 @@ export function createTscServer(): McpServer {
 				const text =
 					format === 'json'
 						? JSON.stringify(output)
-						: output.timedOut
-							? `TypeScript check timed out after ${TSC_TIMEOUT_MS / 1000}s in ${output.cwd}.`
-							: output.exitCode === 0 || output.errorCount === 0
-								? `TypeScript passed (cwd: ${output.cwd})`
-								: formatTscMarkdown(output)
+						: output.exitCode === 0 || output.errorCount === 0
+							? `TypeScript passed (cwd: ${output.cwd})`
+							: formatTscMarkdown(output)
 
 				return {
 					isError: false,
@@ -483,10 +685,16 @@ export function createTscServer(): McpServer {
 					structuredContent: toStructured(output),
 				}
 			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error)
+				const failure = toToolFailure(error)
 				return {
 					isError: true,
-					content: [{ type: 'text', text: `Error: ${message}` }],
+					content: [
+						{
+							type: 'text',
+							text: `${failure.code}: ${failure.message}${failure.remediationHint ? `\n${failure.remediationHint}` : ''}`,
+						},
+					],
+					structuredContent: toStructured(failure),
 				}
 			}
 		},

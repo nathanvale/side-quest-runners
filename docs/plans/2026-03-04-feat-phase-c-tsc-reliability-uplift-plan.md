@@ -1,7 +1,7 @@
 ---
 title: "Phase C: tsc-runner Reliability Uplift"
 type: feat
-status: active
+status: completed
 date: 2026-03-04
 priority: p1
 origin: docs/brainstorms/2026-03-04-tsc-runner-uplift.md
@@ -63,14 +63,14 @@ Detect common corruption signatures (truncated JSON, missing version field) and 
 
 ## Acceptance Criteria
 
-- [ ] `--incremental` flag added to tsc invocation
-- [ ] Env allowlist enforced -- no `...process.env`
-- [ ] Structured error codes for CONFIG_NOT_FOUND, TIMEOUT, SPAWN_FAILURE, PATH_NOT_FOUND
-- [ ] Parser never returns 0 errors on non-zero exit code
-- [ ] `.tsbuildinfo` corruption detected and surfaced with remediation hint
-- [ ] No silent parse failures in any test scenario
-- [ ] Timeout/config/path errors correctly categorized
-- [ ] Each change is a discrete, revertible commit
+- [x] `--incremental` flag added to tsc invocation
+- [x] Env allowlist enforced -- no `...process.env`
+- [x] Structured error codes for CONFIG_NOT_FOUND, TIMEOUT, SPAWN_FAILURE, PATH_NOT_FOUND
+- [x] Parser never returns 0 errors on non-zero exit code
+- [x] `.tsbuildinfo` corruption detected and surfaced with remediation hint
+- [x] No silent parse failures in any test scenario
+- [x] Timeout/config/path errors correctly categorized
+- [x] Each change is a discrete, revertible commit
 
 ## Sources
 
