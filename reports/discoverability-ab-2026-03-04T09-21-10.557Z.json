@@ -133,7 +133,7 @@
 					}
 				]
 			},
-			"half-cut": {
+			"halfCut": {
 				"trials": 30,
 				"firstChoiceAccuracy": 1,
 				"firstCorrect": 30,
@@ -475,7 +475,7 @@
 			"second": "tsc_check"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P01",
 			"prompt": "Check types before commit",
 			"expected": "tsc_check",
@@ -484,7 +484,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P01",
 			"prompt": "Check types before commit",
 			"expected": "tsc_check",
@@ -493,7 +493,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P01",
 			"prompt": "Check types before commit",
 			"expected": "tsc_check",
@@ -502,7 +502,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P02",
 			"prompt": "Fix lint and formatting in src",
 			"expected": "biome_lintFix",
@@ -511,7 +511,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P02",
 			"prompt": "Fix lint and formatting in src",
 			"expected": "biome_lintFix",
@@ -520,7 +520,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P02",
 			"prompt": "Fix lint and formatting in src",
 			"expected": "biome_lintFix",
@@ -529,7 +529,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P03",
 			"prompt": "Only check lint, do not change files",
 			"expected": "biome_lintCheck",
@@ -538,7 +538,7 @@
 			"second": "biome_formatCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P03",
 			"prompt": "Only check lint, do not change files",
 			"expected": "biome_lintCheck",
@@ -547,7 +547,7 @@
 			"second": "biome_formatCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P03",
 			"prompt": "Only check lint, do not change files",
 			"expected": "biome_lintCheck",
@@ -556,7 +556,7 @@
 			"second": "biome_formatCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P04",
 			"prompt": "Which files are unformatted?",
 			"expected": "biome_formatCheck",
@@ -565,7 +565,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P04",
 			"prompt": "Which files are unformatted?",
 			"expected": "biome_formatCheck",
@@ -574,7 +574,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P04",
 			"prompt": "Which files are unformatted?",
 			"expected": "biome_formatCheck",
@@ -583,7 +583,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P05",
 			"prompt": "Run all tests quickly",
 			"expected": "bun_runTests",
@@ -592,7 +592,7 @@
 			"second": "bun_testCoverage"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P05",
 			"prompt": "Run all tests quickly",
 			"expected": "bun_runTests",
@@ -601,7 +601,7 @@
 			"second": "bun_testCoverage"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P05",
 			"prompt": "Run all tests quickly",
 			"expected": "bun_runTests",
@@ -610,7 +610,7 @@
 			"second": "bun_testCoverage"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P06",
 			"prompt": "Run tests for src/auth/login.test.ts only",
 			"expected": "bun_testFile",
@@ -619,7 +619,7 @@
 			"second": "tsc_check"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P06",
 			"prompt": "Run tests for src/auth/login.test.ts only",
 			"expected": "bun_testFile",
@@ -628,7 +628,7 @@
 			"second": "tsc_check"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P06",
 			"prompt": "Run tests for src/auth/login.test.ts only",
 			"expected": "bun_testFile",
@@ -637,7 +637,7 @@
 			"second": "tsc_check"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P07",
 			"prompt": "Give me coverage before release",
 			"expected": "bun_testCoverage",
@@ -646,7 +646,7 @@
 			"second": "bun_runTests"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P07",
 			"prompt": "Give me coverage before release",
 			"expected": "bun_testCoverage",
@@ -655,7 +655,7 @@
 			"second": "bun_runTests"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P07",
 			"prompt": "Give me coverage before release",
 			"expected": "bun_testCoverage",
@@ -664,7 +664,7 @@
 			"second": "bun_runTests"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P08",
 			"prompt": "Type errors only, no lint",
 			"expected": "tsc_check",
@@ -673,7 +673,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P08",
 			"prompt": "Type errors only, no lint",
 			"expected": "tsc_check",
@@ -682,7 +682,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P08",
 			"prompt": "Type errors only, no lint",
 			"expected": "tsc_check",
@@ -691,7 +691,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P09",
 			"prompt": "Auto-fix style issues",
 			"expected": "biome_lintFix",
@@ -700,7 +700,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P09",
 			"prompt": "Auto-fix style issues",
 			"expected": "biome_lintFix",
@@ -709,7 +709,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P09",
 			"prompt": "Auto-fix style issues",
 			"expected": "biome_lintFix",
@@ -718,7 +718,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P10",
 			"prompt": "Read-only formatting gate for CI",
 			"expected": "biome_formatCheck",
@@ -727,7 +727,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P10",
 			"prompt": "Read-only formatting gate for CI",
 			"expected": "biome_formatCheck",
@@ -736,7 +736,7 @@
 			"second": "biome_lintCheck"
 		},
 		{
-			"variant": "half-cut",
+			"variant": "halfCut",
 			"promptId": "P10",
 			"prompt": "Read-only formatting gate for CI",
 			"expected": "biome_formatCheck",

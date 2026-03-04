@@ -314,27 +314,29 @@ describe('bun tools integration', () => {
 
 		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
 
-		const list = await client.listTools()
+		try {
+			const list = await client.listTools()
 
-		const runTests = list.tools.find((entry) => entry.name === 'bun_runTests')
-		expect(runTests).toBeDefined()
-		expect(runTests?.title).toBe('Bun Test Runner')
-		expect(runTests?.annotations?.readOnlyHint).toBe(true)
-		expect(runTests?.outputSchema).toBeDefined()
+			const runTests = list.tools.find((entry) => entry.name === 'bun_runTests')
+			expect(runTests).toBeDefined()
+			expect(runTests?.title).toBe('Bun Test Runner')
+			expect(runTests?.annotations?.readOnlyHint).toBe(true)
+			expect(runTests?.outputSchema).toBeDefined()
 
-		const testFile = list.tools.find((entry) => entry.name === 'bun_testFile')
-		expect(testFile).toBeDefined()
-		expect(testFile?.title).toBe('Bun Single File Test Runner')
-		expect(testFile?.annotations?.readOnlyHint).toBe(true)
-		expect(testFile?.outputSchema).toBeDefined()
+			const testFile = list.tools.find((entry) => entry.name === 'bun_testFile')
+			expect(testFile).toBeDefined()
+			expect(testFile?.title).toBe('Bun Single File Test Runner')
+			expect(testFile?.annotations?.readOnlyHint).toBe(true)
+			expect(testFile?.outputSchema).toBeDefined()
 
-		const testCoverage = list.tools.find((entry) => entry.name === 'bun_testCoverage')
-		expect(testCoverage).toBeDefined()
-		expect(testCoverage?.title).toBe('Bun Test Coverage Reporter')
-		expect(testCoverage?.annotations?.readOnlyHint).toBe(true)
-		expect(testCoverage?.outputSchema).toBeDefined()
-
-		await Promise.all([client.close(), server.close()])
+			const testCoverage = list.tools.find((entry) => entry.name === 'bun_testCoverage')
+			expect(testCoverage).toBeDefined()
+			expect(testCoverage?.title).toBe('Bun Test Coverage Reporter')
+			expect(testCoverage?.annotations?.readOnlyHint).toBe(true)
+			expect(testCoverage?.outputSchema).toBeDefined()
+		} finally {
+			await Promise.all([client.close(), server.close()])
+		}
 	})
 
 	test('callTool returns structuredContent for runTests', async () => {
@@ -345,29 +347,31 @@ describe('bun tools integration', () => {
 
 		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
 
-		const result = await client.callTool({
-			name: 'bun_runTests',
-			arguments: {
-				pattern: 'nonesuchpattern',
-				response_format: 'json',
-			},
-		})
+		try {
+			const result = await client.callTool({
+				name: 'bun_runTests',
+				arguments: {
+					pattern: 'nonesuchpattern',
+					response_format: 'json',
+				},
+			})
 
-		expect(result.isError).toBe(false)
-		expect(result.structuredContent).toBeDefined()
+			expect(result.isError).toBe(false)
+			expect(result.structuredContent).toBeDefined()
 
-		const summary = result.structuredContent as {
-			passed: number
-			failed: number
-			total: number
-			failures: Array<{ file: string; message: string; line: number | null }>
+			const summary = result.structuredContent as {
+				passed: number
+				failed: number
+				total: number
+				failures: Array<{ file: string; message: string; line: number | null }>
+			}
+
+			expect(typeof summary.passed).toBe('number')
+			expect(typeof summary.failed).toBe('number')
+			expect(typeof summary.total).toBe('number')
+			expect(Array.isArray(summary.failures)).toBe(true)
+		} finally {
+			await Promise.all([client.close(), server.close()])
 		}
-
-		expect(typeof summary.passed).toBe('number')
-		expect(typeof summary.failed).toBe('number')
-		expect(typeof summary.total).toBe('number')
-		expect(Array.isArray(summary.failures)).toBe(true)
-
-		await Promise.all([client.close(), server.close()])
 	})
 })

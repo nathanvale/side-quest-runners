@@ -375,21 +375,20 @@ async function runBiomeFix(
 	const remaining = await runBiomeCheck(inputPath)
 
 	// Derive fix counts by diffing before/after diagnostics by category.
-	const formatBefore = before.diagnostics.filter((d) =>
-		d.code.startsWith('format'),
+	// Lint diagnostics use 'lint/<group>/<ruleName>' (e.g. 'lint/suspicious/noDoubleEquals').
+	// Format issues don't carry a 'format/' prefix -- they are the remaining
+	// resolved diagnostics not categorised as lint.
+	const totalBefore = before.diagnostics.length
+	const totalAfter = remaining.diagnostics.length
+	const lintBefore = before.diagnostics.filter((d) =>
+		d.code.startsWith('lint/'),
 	).length
-	const formatAfter = remaining.diagnostics.filter((d) =>
-		d.code.startsWith('format'),
-	).length
-	const lintBefore = before.diagnostics.filter(
-		(d) => !d.code.startsWith('format'),
-	).length
-	const lintAfter = remaining.diagnostics.filter(
-		(d) => !d.code.startsWith('format'),
+	const lintAfter = remaining.diagnostics.filter((d) =>
+		d.code.startsWith('lint/'),
 	).length
 
-	const formatFixed = Math.max(0, formatBefore - formatAfter)
 	const lintFixed = Math.max(0, lintBefore - lintAfter)
+	const formatFixed = Math.max(0, totalBefore - totalAfter - lintFixed)
 
 	return {
 		fixed: formatFixed + lintFixed,

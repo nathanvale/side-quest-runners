@@ -111,16 +111,18 @@ describe('tsc_check integration', () => {
 
 		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
 
-		const list = await client.listTools()
-		const tool = list.tools.find((entry) => entry.name === 'tsc_check')
+		try {
+			const list = await client.listTools()
+			const tool = list.tools.find((entry) => entry.name === 'tsc_check')
 
-		expect(tool).toBeDefined()
-		expect(tool?.title).toBe('TypeScript Type Checker')
-		expect(tool?.annotations?.readOnlyHint).toBe(true)
-		expect(tool?.annotations?.idempotentHint).toBe(true)
-		expect(tool?.outputSchema).toBeDefined()
-
-		await Promise.all([client.close(), server.close()])
+			expect(tool).toBeDefined()
+			expect(tool?.title).toBe('TypeScript Type Checker')
+			expect(tool?.annotations?.readOnlyHint).toBe(true)
+			expect(tool?.annotations?.idempotentHint).toBe(true)
+			expect(tool?.outputSchema).toBeDefined()
+		} finally {
+			await Promise.all([client.close(), server.close()])
+		}
 	})
 
 	test('callTool returns structuredContent', async () => {
@@ -131,31 +133,33 @@ describe('tsc_check integration', () => {
 
 		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
 
-		const result = await client.callTool({
-			name: 'tsc_check',
-			arguments: {
-				path: '.',
-				response_format: 'json',
-			},
-		})
+		try {
+			const result = await client.callTool({
+				name: 'tsc_check',
+				arguments: {
+					path: '.',
+					response_format: 'json',
+				},
+			})
 
-		expect(result.isError).toBe(false)
-		expect(result.structuredContent).toBeDefined()
+			expect(result.isError).toBe(false)
+			expect(result.structuredContent).toBeDefined()
 
-		const output = result.structuredContent as {
-			cwd: string
-			configPath: string
-			timedOut: boolean
-			exitCode: number
-			errors: Array<{ file: string; line: number; col: number; message: string }>
-			errorCount: number
+			const output = result.structuredContent as {
+				cwd: string
+				configPath: string
+				timedOut: boolean
+				exitCode: number
+				errors: Array<{ file: string; line: number; col: number; message: string }>
+				errorCount: number
+			}
+
+			expect(typeof output.cwd).toBe('string')
+			expect(typeof output.configPath).toBe('string')
+			expect(typeof output.errorCount).toBe('number')
+			expect(Array.isArray(output.errors)).toBe(true)
+		} finally {
+			await Promise.all([client.close(), server.close()])
 		}
-
-		expect(typeof output.cwd).toBe('string')
-		expect(typeof output.configPath).toBe('string')
-		expect(typeof output.errorCount).toBe('number')
-		expect(Array.isArray(output.errors)).toBe(true)
-
-		await Promise.all([client.close(), server.close()])
 	})
 })

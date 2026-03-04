@@ -407,8 +407,8 @@ Core's import chain pulls in 40+ modules (oauth, compression, geo, html, streams
 
 - **Origin brainstorm:** [docs/brainstorms/2026-03-04-tsc-runner-uplift.md](../brainstorms/2026-03-04-tsc-runner-uplift.md) -- Phase A definition
 - **Architecture decision:** [docs/research/2026-03-04-phase-0-architecture-gate-decision.md](../research/2026-03-04-phase-0-architecture-gate-decision.md) -- "drop core" with evidence
-- **PoC reference:** `packages/tsc-runner/mcp/raw-sdk-poc.ts` -- working raw SDK implementation
-- **PoC test:** `packages/tsc-runner/mcp/raw-sdk-poc.test.ts` -- InMemoryTransport pattern
+- **PoC reference (archived):** `packages/tsc-runner/mcp/raw-sdk-poc.ts` -- deleted after migration; patterns now live in `packages/tsc-runner/mcp/index.ts`
+- **PoC test (archived):** `packages/tsc-runner/mcp/raw-sdk-poc.test.ts` -- deleted after migration; patterns now live in `packages/tsc-runner/mcp/index.test.ts`
 - **Contract artifacts:** [docs/research/2026-03-04-cross-runner-contract-artifacts.md](../research/2026-03-04-cross-runner-contract-artifacts.md) -- title/outputSchema/descriptions for all 7 tools
 - **Institutional learning:** [docs/solutions/integration-issues/mcp-tool-discoverability-ab-benchmark.md](../solutions/integration-issues/mcp-tool-discoverability-ab-benchmark.md) -- re-run A/B benchmark after migration
 

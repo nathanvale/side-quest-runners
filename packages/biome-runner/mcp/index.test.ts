@@ -87,27 +87,29 @@ describe('biome tools integration', () => {
 
 		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
 
-		const list = await client.listTools()
+		try {
+			const list = await client.listTools()
 
-		const lintCheck = list.tools.find((entry) => entry.name === 'biome_lintCheck')
-		expect(lintCheck).toBeDefined()
-		expect(lintCheck?.title).toBe('Biome Lint Checker')
-		expect(lintCheck?.annotations?.readOnlyHint).toBe(true)
-		expect(lintCheck?.outputSchema).toBeDefined()
+			const lintCheck = list.tools.find((entry) => entry.name === 'biome_lintCheck')
+			expect(lintCheck).toBeDefined()
+			expect(lintCheck?.title).toBe('Biome Lint Checker')
+			expect(lintCheck?.annotations?.readOnlyHint).toBe(true)
+			expect(lintCheck?.outputSchema).toBeDefined()
 
-		const lintFix = list.tools.find((entry) => entry.name === 'biome_lintFix')
-		expect(lintFix).toBeDefined()
-		expect(lintFix?.title).toBe('Biome Lint Fixer')
-		expect(lintFix?.annotations?.destructiveHint).toBe(true)
-		expect(lintFix?.outputSchema).toBeDefined()
+			const lintFix = list.tools.find((entry) => entry.name === 'biome_lintFix')
+			expect(lintFix).toBeDefined()
+			expect(lintFix?.title).toBe('Biome Lint Fixer')
+			expect(lintFix?.annotations?.destructiveHint).toBe(true)
+			expect(lintFix?.outputSchema).toBeDefined()
 
-		const formatCheck = list.tools.find((entry) => entry.name === 'biome_formatCheck')
-		expect(formatCheck).toBeDefined()
-		expect(formatCheck?.title).toBe('Biome Format Checker')
-		expect(formatCheck?.annotations?.readOnlyHint).toBe(true)
-		expect(formatCheck?.outputSchema).toBeDefined()
-
-		await Promise.all([client.close(), server.close()])
+			const formatCheck = list.tools.find((entry) => entry.name === 'biome_formatCheck')
+			expect(formatCheck).toBeDefined()
+			expect(formatCheck?.title).toBe('Biome Format Checker')
+			expect(formatCheck?.annotations?.readOnlyHint).toBe(true)
+			expect(formatCheck?.outputSchema).toBeDefined()
+		} finally {
+			await Promise.all([client.close(), server.close()])
+		}
 	})
 
 	test('lintCheck returns structuredContent', async () => {
@@ -118,28 +120,30 @@ describe('biome tools integration', () => {
 
 		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
 
-		const result = await client.callTool({
-			name: 'biome_lintCheck',
-			arguments: {
-				path: 'packages/biome-runner',
-				response_format: 'json',
-			},
-		})
+		try {
+			const result = await client.callTool({
+				name: 'biome_lintCheck',
+				arguments: {
+					path: 'packages/biome-runner',
+					response_format: 'json',
+				},
+			})
 
-		expect(result.isError).toBe(false)
-		expect(result.structuredContent).toBeDefined()
+			expect(result.isError).toBe(false)
+			expect(result.structuredContent).toBeDefined()
 
-		const output = result.structuredContent as {
-			errorCount: number
-			warningCount: number
-			diagnostics: Array<{ file: string; message: string }>
+			const output = result.structuredContent as {
+				errorCount: number
+				warningCount: number
+				diagnostics: Array<{ file: string; message: string }>
+			}
+
+			expect(typeof output.errorCount).toBe('number')
+			expect(typeof output.warningCount).toBe('number')
+			expect(Array.isArray(output.diagnostics)).toBe(true)
+		} finally {
+			await Promise.all([client.close(), server.close()])
 		}
-
-		expect(typeof output.errorCount).toBe('number')
-		expect(typeof output.warningCount).toBe('number')
-		expect(Array.isArray(output.diagnostics)).toBe(true)
-
-		await Promise.all([client.close(), server.close()])
 	})
 
 	test('format check returns structuredContent', async () => {
@@ -150,25 +154,27 @@ describe('biome tools integration', () => {
 
 		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
 
-		const result = await client.callTool({
-			name: 'biome_formatCheck',
-			arguments: {
-				path: 'packages/biome-runner',
-				response_format: 'json',
-			},
-		})
+		try {
+			const result = await client.callTool({
+				name: 'biome_formatCheck',
+				arguments: {
+					path: 'packages/biome-runner',
+					response_format: 'json',
+				},
+			})
 
-		expect(result.isError).toBe(false)
-		expect(result.structuredContent).toBeDefined()
+			expect(result.isError).toBe(false)
+			expect(result.structuredContent).toBeDefined()
 
-		const output = result.structuredContent as {
-			formatted: boolean
-			unformattedFiles: string[]
+			const output = result.structuredContent as {
+				formatted: boolean
+				unformattedFiles: string[]
+			}
+
+			expect(typeof output.formatted).toBe('boolean')
+			expect(Array.isArray(output.unformattedFiles)).toBe(true)
+		} finally {
+			await Promise.all([client.close(), server.close()])
 		}
-
-		expect(typeof output.formatted).toBe('boolean')
-		expect(Array.isArray(output.unformattedFiles)).toBe(true)
-
-		await Promise.all([client.close(), server.close()])
 	})
 })
