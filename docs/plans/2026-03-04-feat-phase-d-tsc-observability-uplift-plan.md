@@ -169,7 +169,7 @@ await configure({
 
 LogTape uses array-based categories with parent-child inheritance. Child categories inherit parent config unless overridden:
 
-```
+```text
 ["mcp"]                          // root -- catches all MCP logs
 ["mcp", "lifecycle"]             // server start/stop/connect
 ["mcp", "tools"]                 // all tool invocations

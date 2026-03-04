@@ -671,10 +671,20 @@ function createBunStderrWritableStream(): WritableStream {
 			}
 			writer.write(chunk)
 		},
-		close() {
+		async close() {
+			if (writer) {
+				try {
+					await writer.flush()
+				} catch {}
+			}
 			writer = null
 		},
-		abort() {
+		async abort() {
+			if (writer) {
+				try {
+					await writer.flush()
+				} catch {}
+			}
 			writer = null
 		},
 	})
