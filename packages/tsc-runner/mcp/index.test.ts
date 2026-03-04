@@ -1,9 +1,10 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { rm, symlink } from 'node:fs/promises'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import { LoggingMessageNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
 import {
 	_resetGitRootCache,
 	buildTscOutput,
@@ -16,6 +17,24 @@ import {
 	validatePath,
 	validatePathOrDefault,
 } from './index'
+
+function createCaptureWritableStream(chunks: string[]): WritableStream {
+	const decoder = new TextDecoder()
+
+	return new WritableStream({
+		write(chunk: unknown) {
+			if (typeof chunk === 'string') {
+				chunks.push(chunk)
+				return
+			}
+			if (chunk instanceof Uint8Array) {
+				chunks.push(decoder.decode(chunk))
+				return
+			}
+			chunks.push(String(chunk))
+		},
+	})
+}
 
 describe('parseTscOutput', () => {
 	test('parses TypeScript errors', () => {
@@ -229,7 +248,7 @@ describe('tsc_check integration', () => {
 	})
 
 	test('exposes title/outputSchema/annotations via tools/list', async () => {
-		const server = createTscServer()
+		const server = await createTscServer()
 		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -244,6 +263,7 @@ describe('tsc_check integration', () => {
 			expect(tool?.annotations?.readOnlyHint).toBe(true)
 			expect(tool?.annotations?.idempotentHint).toBe(true)
 			expect(tool?.outputSchema).toBeDefined()
+			expect(client.getServerCapabilities()?.logging).toBeDefined()
 		} finally {
 			await Promise.all([client.close(), server.close()])
 		}
@@ -251,7 +271,7 @@ describe('tsc_check integration', () => {
 
 	test('callTool returns structuredContent', async () => {
 		_resetGitRootCache()
-		const server = createTscServer()
+		const server = await createTscServer()
 		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -295,7 +315,10 @@ describe('tsc_check integration', () => {
 
 	test('returns PATH_NOT_FOUND for unknown paths', async () => {
 		_resetGitRootCache()
-		const server = createTscServer()
+		const stderrChunks: string[] = []
+		const server = await createTscServer({
+			stderrStream: createCaptureWritableStream(stderrChunks),
+		})
 		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -313,6 +336,133 @@ describe('tsc_check integration', () => {
 			expect(result.isError).toBe(true)
 			expect(result.content[0]?.type).toBe('text')
 			expect(result.content[0]?.text).toContain('PATH_NOT_FOUND')
+		} finally {
+			await Promise.all([client.close(), server.close()])
+		}
+	})
+
+	test('logging does not write to stdout', async () => {
+		_resetGitRootCache()
+		const stderrChunks: string[] = []
+		const server = await createTscServer({
+			stderrStream: createCaptureWritableStream(stderrChunks),
+		})
+		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+		const stdoutSpy = spyOn(process.stdout, 'write').mockImplementation(() => true)
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			await client.callTool({
+				name: 'tsc_check',
+				arguments: {
+					path: '.',
+					response_format: 'json',
+				},
+			})
+			expect(stdoutSpy.mock.calls).toHaveLength(0)
+		} finally {
+			stdoutSpy.mockRestore()
+			await Promise.all([client.close(), server.close()])
+		}
+	})
+
+	test('logs JSONL to stderr and stays silent on successful requests', async () => {
+		_resetGitRootCache()
+		const stderrChunks: string[] = []
+		const server = await createTscServer({
+			stderrStream: createCaptureWritableStream(stderrChunks),
+		})
+		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			await client.callTool({
+				name: 'tsc_check',
+				arguments: {
+					path: '.',
+					response_format: 'json',
+				},
+			})
+			expect(stderrChunks.join('')).toBe('')
+
+			await client.callTool({
+				name: 'tsc_check',
+				arguments: {
+					path: `${process.cwd()}/definitely-missing-path`,
+					response_format: 'json',
+				},
+			})
+			const lines = stderrChunks
+				.join('')
+				.split('\n')
+				.map((line) => line.trim())
+				.filter((line) => line.length > 0)
+
+			expect(lines.length).toBeGreaterThan(0)
+			for (const line of lines) {
+				const parsed = JSON.parse(line) as Record<string, unknown>
+				expect(parsed.level).toBeDefined()
+				expect(parsed.logger).toBeDefined()
+				expect(parsed.message).toBeDefined()
+			}
+		} finally {
+			await Promise.all([client.close(), server.close()])
+		}
+	})
+
+	test('forwards error logs as MCP notifications and honors logging/setLevel', async () => {
+		_resetGitRootCache()
+		const stderrChunks: string[] = []
+		const notifications: Array<{ level: string; logger?: string }> = []
+		const server = await createTscServer({
+			stderrStream: createCaptureWritableStream(stderrChunks),
+		})
+		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		client.setNotificationHandler(LoggingMessageNotificationSchema, (notification) => {
+			notifications.push({
+				level: notification.params.level,
+				logger: notification.params.logger,
+			})
+		})
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			await client.callTool({
+				name: 'tsc_check',
+				arguments: {
+					path: '.',
+					response_format: 'json',
+				},
+			})
+			expect(notifications.length).toBe(0)
+
+			await client.setLoggingLevel('info')
+			await client.callTool({
+				name: 'tsc_check',
+				arguments: {
+					path: '.',
+					response_format: 'json',
+				},
+			})
+			expect(notifications.some((entry) => entry.level === 'info')).toBe(true)
+
+			await client.setLoggingLevel('warning')
+			notifications.length = 0
+			await client.callTool({
+				name: 'tsc_check',
+				arguments: {
+					path: `${process.cwd()}/definitely-missing-path`,
+					response_format: 'json',
+				},
+			})
+			expect(notifications.some((entry) => entry.level === 'error')).toBe(true)
 		} finally {
 			await Promise.all([client.close(), server.close()])
 		}
