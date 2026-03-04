@@ -4,7 +4,7 @@ title: Token Bloat vs Discoverability Cross-Check (Half-Cut Set)
 type: research
 tags: [mcp, prompt-engineering, token-optimization, discoverability]
 project: side-quest-runners
-status: draft
+status: superseded
 related:
   - docs/research/2026-03-04-cross-runner-contract-artifacts.md
 ---
