@@ -6,7 +6,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import {
 	_resetGitRootCache,
+	buildTscOutput,
+	createTscInvocation,
 	createTscServer,
+	detectTsBuildInfoCorruption,
 	formatTscMarkdown,
 	parseTscOutput,
 	SERVER_VERSION,
@@ -79,6 +82,108 @@ describe('formatTscMarkdown', () => {
 		expect(markdown).toContain('src/utils.ts:20:3')
 		expect(markdown).toContain('Argument type mismatch.')
 		expect(markdown).toContain('tsconfig.json')
+	})
+})
+
+describe('createTscInvocation', () => {
+	test('enables incremental mode and uses project config path', () => {
+		const invocation = createTscInvocation('/repo/tsconfig.json')
+
+		expect(invocation.cmd).toEqual([
+			'bunx',
+			'tsc',
+			'--noEmit',
+			'--pretty',
+			'false',
+			'--incremental',
+			'--project',
+			'/repo/tsconfig.json',
+		])
+	})
+
+	test('applies strict env allowlist plus CI', () => {
+		const previousNodePath = process.env.NODE_PATH
+		const previousBunInstall = process.env.BUN_INSTALL
+		const previousTmpdir = process.env.TMPDIR
+		try {
+			process.env.NODE_PATH = '/tmp/node-path'
+			process.env.BUN_INSTALL = '/tmp/bun-install'
+			process.env.TMPDIR = '/tmp'
+
+			const invocation = createTscInvocation('/repo/tsconfig.json')
+			const keys = Object.keys(invocation.env)
+
+			expect(keys.includes('CI')).toBe(true)
+			expect(keys.includes('PATH')).toBe(true)
+			expect(keys.includes('HOME')).toBe(true)
+			expect(keys.includes('NODE_PATH')).toBe(true)
+			expect(keys.includes('BUN_INSTALL')).toBe(true)
+			expect(keys.includes('TMPDIR')).toBe(true)
+			expect(keys.includes('AWS_SECRET_ACCESS_KEY')).toBe(false)
+			expect(keys.includes('GITHUB_TOKEN')).toBe(false)
+		} finally {
+			if (previousNodePath === undefined) {
+				delete process.env.NODE_PATH
+			} else {
+				process.env.NODE_PATH = previousNodePath
+			}
+			if (previousBunInstall === undefined) {
+				delete process.env.BUN_INSTALL
+			} else {
+				process.env.BUN_INSTALL = previousBunInstall
+			}
+			if (previousTmpdir === undefined) {
+				delete process.env.TMPDIR
+			} else {
+				process.env.TMPDIR = previousTmpdir
+			}
+		}
+	})
+})
+
+describe('buildTscOutput', () => {
+	test('uses parser fallback when tsc exits non-zero without parsed diagnostics', () => {
+		const output = buildTscOutput({
+			cwd: '/repo',
+			configPath: '/repo/tsconfig.json',
+			stdout: '',
+			stderr: 'Internal compiler error without standard diagnostic shape',
+			exitCode: 2,
+			timedOut: false,
+		})
+
+		expect(output.errorCount).toBe(1)
+		expect(output.errors[0]?.code).toBe('TS_PARSE_FALLBACK')
+		expect(output.parseWarning).toContain('exited non-zero')
+		expect(output.rawStderr).toContain('Internal compiler error')
+	})
+
+	test('adds corruption remediation hint when tsbuildinfo signatures are present', () => {
+		const output = buildTscOutput({
+			cwd: '/repo',
+			configPath: '/repo/tsconfig.json',
+			stdout: '',
+			stderr:
+				"Error reading /repo/.tsbuildinfo: Cannot read properties of undefined (reading 'version')",
+			exitCode: 2,
+			timedOut: false,
+		})
+
+		expect(output.remediationHint).toContain('Delete .tsbuildinfo and retry')
+	})
+})
+
+describe('detectTsBuildInfoCorruption', () => {
+	test('returns remediation hint for known corruption signatures', () => {
+		const hint = detectTsBuildInfoCorruption(
+			'Unexpected end of JSON input while reading cache /repo/.tsbuildinfo',
+		)
+
+		expect(hint).toContain('Delete .tsbuildinfo and retry')
+	})
+
+	test('returns null for unrelated output', () => {
+		expect(detectTsBuildInfoCorruption('src/index.ts(1,1): error TS2304: MissingName')).toBeNull()
 	})
 })
 
@@ -183,6 +288,31 @@ describe('tsc_check integration', () => {
 			expect(typeof output.configPath).toBe('string')
 			expect(typeof output.errorCount).toBe('number')
 			expect(Array.isArray(output.errors)).toBe(true)
+		} finally {
+			await Promise.all([client.close(), server.close()])
+		}
+	})
+
+	test('returns PATH_NOT_FOUND for unknown paths', async () => {
+		_resetGitRootCache()
+		const server = createTscServer()
+		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'tsc_check',
+				arguments: {
+					path: `${process.cwd()}/definitely-missing-path`,
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(true)
+			expect(result.content[0]?.type).toBe('text')
+			expect(result.content[0]?.text).toContain('PATH_NOT_FOUND')
 		} finally {
 			await Promise.all([client.close(), server.close()])
 		}
