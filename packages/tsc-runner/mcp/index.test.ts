@@ -248,7 +248,7 @@ describe('tsc_check integration', () => {
 	})
 
 	test('exposes title/outputSchema/annotations via tools/list', async () => {
-		const server = createTscServer()
+		const server = await createTscServer()
 		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -271,7 +271,7 @@ describe('tsc_check integration', () => {
 
 	test('callTool returns structuredContent', async () => {
 		_resetGitRootCache()
-		const server = createTscServer()
+		const server = await createTscServer()
 		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -316,7 +316,7 @@ describe('tsc_check integration', () => {
 	test('returns PATH_NOT_FOUND for unknown paths', async () => {
 		_resetGitRootCache()
 		const stderrChunks: string[] = []
-		const server = createTscServer({
+		const server = await createTscServer({
 			stderrStream: createCaptureWritableStream(stderrChunks),
 		})
 		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
@@ -344,7 +344,7 @@ describe('tsc_check integration', () => {
 	test('logging does not write to stdout', async () => {
 		_resetGitRootCache()
 		const stderrChunks: string[] = []
-		const server = createTscServer({
+		const server = await createTscServer({
 			stderrStream: createCaptureWritableStream(stderrChunks),
 		})
 		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
@@ -371,7 +371,7 @@ describe('tsc_check integration', () => {
 	test('logs JSONL to stderr and stays silent on successful requests', async () => {
 		_resetGitRootCache()
 		const stderrChunks: string[] = []
-		const server = createTscServer({
+		const server = await createTscServer({
 			stderrStream: createCaptureWritableStream(stderrChunks),
 		})
 		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
@@ -418,7 +418,7 @@ describe('tsc_check integration', () => {
 		_resetGitRootCache()
 		const stderrChunks: string[] = []
 		const notifications: Array<{ level: string; logger?: string }> = []
-		const server = createTscServer({
+		const server = await createTscServer({
 			stderrStream: createCaptureWritableStream(stderrChunks),
 		})
 		const client = new Client({ name: 'tsc-client', version: '0.0.1' })

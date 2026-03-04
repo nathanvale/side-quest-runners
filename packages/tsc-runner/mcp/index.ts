@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs'
 import { access, realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
 import {
-	configureSync,
+	configure,
 	dispose,
 	fingersCrossed,
 	getLogger,
@@ -714,14 +714,19 @@ function createMcpProtocolSink(
 			return
 		}
 
-		void server.sendLoggingMessage({
-			level: LOGTAPE_TO_MCP_LEVEL[record.level],
-			logger: record.category.join('.'),
-			data: {
-				message: stringifyLogMessage(record.message),
-				properties: record.properties,
-			},
-		})
+		try {
+			const result = server.sendLoggingMessage({
+				level: LOGTAPE_TO_MCP_LEVEL[record.level],
+				logger: record.category.join('.'),
+				data: {
+					message: stringifyLogMessage(record.message),
+					properties: record.properties,
+				},
+			})
+			void Promise.resolve(result).catch(() => undefined)
+		} catch {
+			// best-effort sink: drop notification when transport is no longer writable
+		}
 	}
 }
 
@@ -732,11 +737,11 @@ function createMcpProtocolSink(
  * JSONL and client-visible logs via notifications/message with explicit level
  * gating and request-scoped context isolation.
  */
-function setupObservability(
+async function setupObservability(
 	server: McpServer,
 	state: ObservabilityState,
 	options?: TscServerOptions,
-): void {
+): Promise<void> {
 	const stderrSink = getStreamSink(
 		options?.stderrStream ?? createBunStderrWritableStream(),
 		{
@@ -758,7 +763,7 @@ function setupObservability(
 
 	const mcpProtocolSink = createMcpProtocolSink(server, state)
 
-	configureSync({
+	await configure({
 		reset: true,
 		contextLocalStorage: new AsyncLocalStorage<Record<string, unknown>>(),
 		sinks: {
@@ -804,7 +809,9 @@ export function formatTscMarkdown(output: TscOutput): string {
  * Why: factory construction keeps transport wiring out of tests so integration
  * coverage can use InMemoryTransport.
  */
-export function createTscServer(options?: TscServerOptions): McpServer {
+export async function createTscServer(
+	options?: TscServerOptions,
+): Promise<McpServer> {
 	const observabilityState: ObservabilityState = {
 		clientMcpLogLevel: DEFAULT_MCP_LOG_LEVEL,
 	}
@@ -820,7 +827,7 @@ export function createTscServer(options?: TscServerOptions): McpServer {
 			},
 		},
 	)
-	setupObservability(server, observabilityState, options)
+	await setupObservability(server, observabilityState, options)
 
 	const lifecycleLogger = getLogger(['mcp', 'lifecycle'])
 	const toolLogger = getLogger(['mcp', 'tools', 'tsc_check'])
@@ -937,7 +944,7 @@ export function createTscServer(options?: TscServerOptions): McpServer {
  * Why: explicit lifecycle wiring keeps shutdown reliable in CLI-hosted runs.
  */
 export async function startTscServer(): Promise<void> {
-	const server = createTscServer()
+	const server = await createTscServer()
 	const transport = new StdioServerTransport()
 	let shuttingDown = false
 	const lifecycleLogger = getLogger(['mcp', 'lifecycle'])
