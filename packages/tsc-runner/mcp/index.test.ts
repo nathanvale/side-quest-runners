@@ -305,7 +305,7 @@ describe('tsc_check integration', () => {
 			const result = await client.callTool({
 				name: 'tsc_check',
 				arguments: {
-					path: '/Users/nathanvale/code/side-quest-runners/definitely-missing-path',
+					path: `${process.cwd()}/definitely-missing-path`,
 					response_format: 'json',
 				},
 			})
