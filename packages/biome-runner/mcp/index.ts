@@ -5,37 +5,27 @@
 /**
  * Biome Linter & Formatter MCP Server
  *
- * Provides tools to run Biome linting and formatting with structured, token-efficient output.
- * Filters out verbose logs, focusing agents on actionable diagnostics.
- *
- * Uses native Bun.spawn() for better performance over Node.js child_process.
+ * Provides tools to run Biome linting and formatting with structured output.
  */
 
-import {
-	createCorrelationId,
-	createPluginLogger,
-} from '@side-quest/core/logging'
-import { startServer, tool, z } from '@side-quest/core/mcp'
-import {
-	createLoggerAdapter,
-	type Logger,
-	ResponseFormat,
-	wrapToolHandler,
-} from '@side-quest/core/mcp-response'
-import { spawnAndCollect } from '@side-quest/core/spawn'
-import { validatePathOrDefault } from '@side-quest/core/validation'
+import { realpath } from 'node:fs/promises'
+import path from 'node:path'
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { z } from 'zod'
 
-// Initialize logger
-const { initLogger, getSubsystemLogger } = createPluginLogger({
-	name: 'biome-runner',
-	subsystems: ['mcp'],
-})
-
-initLogger().catch(console.error)
-
-const mcpLogger = getSubsystemLogger('mcp')
-
-// --- Types ---
+/**
+ * Bridge Zod-inferred output types to the SDK's Record<string, unknown>.
+ *
+ * Why: CallToolResult.structuredContent is typed as Record<string, unknown>),
+ * but our Zod-inferred types (LintSummary, etc.) have concrete keys that
+ * TypeScript considers structurally incompatible. This helper centralizes
+ * the unavoidable cast so tool handlers stay clean.
+ */
+function toStructured(value: object): Record<string, unknown> {
+	return value as Record<string, unknown>
+}
 
 export interface LintDiagnostic {
 	file: string
@@ -43,7 +33,7 @@ export interface LintDiagnostic {
 	code: string
 	line: number
 	severity: 'error' | 'warning' | 'info'
-	suggestion?: string
+	suggestion: string | null
 }
 
 export interface LintSummary {
@@ -52,26 +42,207 @@ export interface LintSummary {
 	diagnostics: LintDiagnostic[]
 }
 
-// --- Parsing Functions (exported for testing) ---
+/** Shape of Biome's JSON reporter output */
+interface BiomeReport {
+	diagnostics?: Array<{
+		severity?: string
+		location?: {
+			path?: { file?: string }
+			span?: { start?: { line?: number } }
+		}
+		description?: string
+		message?: string
+		category?: string
+		advice?: unknown
+	}>
+	summary?: { errors?: number; warnings?: number }
+}
+
+const BIOME_TIMEOUT_MS = 30_000
+
+const lintDiagnosticSchema = z.object({
+	file: z.string(),
+	message: z.string(),
+	code: z.string(),
+	line: z.number(),
+	severity: z.enum(['error', 'warning', 'info']),
+	suggestion: z.string().nullable(),
+})
+
+const lintSummarySchema = z.object({
+	errorCount: z.number(),
+	warningCount: z.number(),
+	diagnostics: z.array(lintDiagnosticSchema),
+})
+
+const lintFixSchema = z.object({
+	fixed: z.number(),
+	formatFixed: z.number(),
+	lintFixed: z.number(),
+	remaining: lintSummarySchema,
+})
+
+const formatCheckSchema = z.object({
+	formatted: z.boolean(),
+	unformattedFiles: z.array(z.string()),
+})
+
+let _gitRootPromise: Promise<string> | null = null
 
 /**
- * Parse Biome JSON output to extract lint diagnostics
+ * Get the git root once per process using promise coalescing.
+ *
+ * Why: validation executes for every tool call and concurrent requests should
+ * share one subprocess instead of spawning duplicate `git rev-parse` calls.
+ */
+export function getGitRoot(): Promise<string> {
+	if (_gitRootPromise !== null) {
+		return _gitRootPromise
+	}
+	_gitRootPromise = resolveGitRoot()
+	return _gitRootPromise
+}
+
+async function resolveGitRoot(): Promise<string> {
+	const proc = Bun.spawn(['git', 'rev-parse', '--show-toplevel'], {
+		stdout: 'pipe',
+		stderr: 'pipe',
+	})
+
+	const [stdout, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		proc.exited,
+	])
+
+	if (exitCode !== 0) {
+		throw new Error('Not inside a git repository')
+	}
+
+	return realpath(stdout.trim())
+}
+
+/**
+ * Reset git-root cache for tests.
+ */
+export function _resetGitRootCache(): void {
+	_gitRootPromise = null
+}
+
+/**
+ * Validate optional path input and default to cwd.
+ *
+ * Why: callers frequently omit or send blank paths; we still enforce all
+ * boundary checks before invoking biome.
+ */
+export async function validatePathOrDefault(
+	inputPath?: string,
+): Promise<string> {
+	const candidate =
+		inputPath === undefined || inputPath.trim() === ''
+			? process.cwd()
+			: inputPath
+	return validatePath(candidate)
+}
+
+/**
+ * Validate path input against traversal and repository-escape vectors.
+ *
+ * Why: biome commands execute against paths and must never read/write outside
+ * the current repository boundary.
+ */
+export async function validatePath(inputPath: string): Promise<string> {
+	if (inputPath.includes('\x00')) {
+		throw new Error('Path contains null byte')
+	}
+	if (hasControlCharacters(inputPath)) {
+		throw new Error(
+			`Path contains control characters: ${JSON.stringify(inputPath)}`,
+		)
+	}
+	if (!inputPath || inputPath.trim() === '') {
+		throw new Error('Path cannot be empty')
+	}
+
+	const resolvedPath = path.resolve(inputPath)
+	let realInputPath: string
+
+	try {
+		realInputPath = await realpath(resolvedPath)
+	} catch (error) {
+		const err = error as NodeJS.ErrnoException
+		if (err.code === 'ENOENT') {
+			realInputPath = await resolveNearestAncestor(resolvedPath)
+		} else {
+			throw new Error(`Cannot resolve path: ${err.message}`)
+		}
+	}
+
+	const gitRoot = await getGitRoot()
+	if (realInputPath !== gitRoot && !realInputPath.startsWith(`${gitRoot}/`)) {
+		throw new Error(`Path outside repository: ${inputPath}`)
+	}
+
+	return realInputPath
+}
+
+function hasControlCharacters(value: string): boolean {
+	for (let index = 0; index < value.length; index += 1) {
+		const code = value.charCodeAt(index)
+		if (code <= 0x1f || code === 0x7f) {
+			return true
+		}
+	}
+	return false
+}
+
+/**
+ * Resolve a non-existent path by walking up to the nearest existing ancestor
+ * and applying realpath there, then re-appending the remaining segments.
+ *
+ * Why: a naive fallback to path.resolve on ENOENT misses intermediate symlinks
+ * that could escape the repository boundary.
+ */
+async function resolveNearestAncestor(resolvedPath: string): Promise<string> {
+	let dir = path.dirname(resolvedPath)
+	const suffix = path.basename(resolvedPath)
+	const segments: string[] = [suffix]
+
+	while (dir !== path.dirname(dir)) {
+		try {
+			const realDir = await realpath(dir)
+			return path.join(realDir, ...segments)
+		} catch {
+			segments.unshift(path.basename(dir))
+			dir = path.dirname(dir)
+		}
+	}
+
+	return resolvedPath
+}
+
+/**
+ * Parse Biome JSON output to extract lint diagnostics.
  */
 export function parseBiomeOutput(stdout: string): LintSummary {
 	try {
-		const report = JSON.parse(stdout)
+		const report = JSON.parse(stdout) as BiomeReport
 		const diagnostics: LintDiagnostic[] = []
 
 		if (report.diagnostics) {
-			for (const d of report.diagnostics) {
-				if (d.severity === 'error' || d.severity === 'warning') {
+			for (const diagnostic of report.diagnostics) {
+				if (
+					diagnostic.severity === 'error' ||
+					diagnostic.severity === 'warning'
+				) {
 					diagnostics.push({
-						file: d.location?.path?.file || 'unknown',
-						line: d.location?.span?.start?.line || 0,
-						message: d.description || d.message,
-						code: d.category || 'unknown',
-						severity: d.severity,
-						suggestion: d.advice ? JSON.stringify(d.advice) : undefined,
+						file: diagnostic.location?.path?.file || 'unknown',
+						line: diagnostic.location?.span?.start?.line || 0,
+						message: diagnostic.description || diagnostic.message || 'unknown',
+						code: diagnostic.category || 'unknown',
+						severity: diagnostic.severity,
+						suggestion: diagnostic.advice
+							? JSON.stringify(diagnostic.advice)
+							: null,
 					})
 				}
 			}
@@ -82,13 +253,13 @@ export function parseBiomeOutput(stdout: string): LintSummary {
 		return {
 			errorCount:
 				summary.errors ??
-				diagnostics.filter((d) => d.severity === 'error').length,
+				diagnostics.filter((entry) => entry.severity === 'error').length,
 			warningCount:
 				summary.warnings ??
-				diagnostics.filter((d) => d.severity === 'warning').length,
+				diagnostics.filter((entry) => entry.severity === 'warning').length,
 			diagnostics,
 		}
-	} catch (_e) {
+	} catch {
 		return {
 			errorCount: 1,
 			warningCount: 0,
@@ -99,170 +270,177 @@ export function parseBiomeOutput(stdout: string): LintSummary {
 					message: `Failed to parse Biome JSON output: ${stdout.substring(0, 200)}`,
 					code: 'internal_error',
 					severity: 'error',
+					suggestion: null,
 				},
 			],
 		}
 	}
 }
 
-// --- Helpers ---
+async function spawnWithTimeout(
+	cmd: string[],
+	options?: {
+		cwd?: string
+		env?: Record<string, string>
+		timeoutMs?: number
+	},
+): Promise<{
+	stdout: string
+	stderr: string
+	exitCode: number
+	timedOut: boolean
+}> {
+	const proc = Bun.spawn(cmd, {
+		cwd: options?.cwd,
+		env: options?.env,
+		stdout: 'pipe',
+		stderr: 'pipe',
+	})
 
-/**
- * Run Biome check and parse JSON output.
- *
- * Why: Uses spawnAndCollect to ensure streams are consumed in parallel with
- * waiting for exit, avoiding race conditions that could lose output.
- *
- * Note: Always parse JSON output regardless of exit code because Biome exits
- * with 0 for warnings (only errors cause non-zero exit). This ensures we
- * report warnings to the user.
- */
-async function runBiomeCheck(path = '.'): Promise<LintSummary> {
-	const { stdout } = await spawnAndCollect([
-		'bunx',
-		'@biomejs/biome',
-		'check',
-		'--reporter=json',
-		path,
+	let timedOut = false
+	let killTimer: ReturnType<typeof setTimeout> | undefined
+	const timeout = setTimeout(() => {
+		timedOut = true
+		proc.kill('SIGTERM')
+		killTimer = setTimeout(() => {
+			try {
+				proc.kill('SIGKILL')
+			} catch {}
+		}, 5_000)
+	}, options?.timeoutMs ?? BIOME_TIMEOUT_MS)
+
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
 	])
 
-	// Always parse output - Biome exits 0 for warnings, only errors cause non-zero
-	return parseBiomeOutput(stdout)
+	clearTimeout(timeout)
+	if (killTimer) clearTimeout(killTimer)
+	return { stdout, stderr, exitCode, timedOut }
 }
 
-/**
- * Run Biome format --write and check --write to fix all issues.
- *
- * Why: Biome has two separate concerns:
- * 1. Formatting (whitespace, indentation) - handled by `biome format`
- * 2. Linting (code quality rules) - handled by `biome check`
- *
- * We need to run BOTH to fix all auto-fixable issues.
- *
- * Uses spawnAndCollect to ensure streams are consumed in parallel with
- * waiting for exit, avoiding race conditions that could lose output.
- */
-async function runBiomeFix(
-	path = '.',
-): Promise<{ formatFixed: number; lintFixed: number; remaining: LintSummary }> {
-	// Step 1: Fix formatting issues
-	const { stdout: formatStdout, exitCode: formatExitCode } =
-		await spawnAndCollect([
-			'bunx',
-			'@biomejs/biome',
-			'format',
-			'--write',
-			'--reporter=json',
-			path,
-		])
+async function runBiomeCheck(inputPath = '.'): Promise<LintSummary> {
+	const { stdout, stderr, timedOut } = await spawnWithTimeout(
+		['bunx', '@biomejs/biome', 'check', '--reporter=json', inputPath],
+		{ timeoutMs: BIOME_TIMEOUT_MS },
+	)
 
-	let formatFixed = 0
-	try {
-		const report = JSON.parse(formatStdout)
-		// Biome format reports number of changed files in summary.changed
-		formatFixed = report.summary?.changed || 0
-	} catch (error) {
-		mcpLogger.warn({
-			message: 'Failed to parse Biome format output',
-			error: error instanceof Error ? error.message : 'Unknown',
-			stdout: formatStdout.substring(0, 200),
-			exitCode: formatExitCode,
-		})
+	if (timedOut) {
+		return {
+			errorCount: 1,
+			warningCount: 0,
+			diagnostics: [
+				{
+					file: 'timeout',
+					line: 0,
+					message: `Biome check timed out after ${BIOME_TIMEOUT_MS / 1000}s`,
+					code: 'timeout',
+					severity: 'error',
+					suggestion: null,
+				},
+			],
+		}
 	}
 
-	// Step 2: Fix linting issues
-	const { stdout: checkStdout, exitCode: checkExitCode } =
-		await spawnAndCollect([
+	return parseBiomeOutput(stdout || stderr)
+}
+
+async function runBiomeFix(
+	inputPath = '.',
+): Promise<z.infer<typeof lintFixSchema>> {
+	// Snapshot diagnostics before fix so we can diff by category.
+	const before = await runBiomeCheck(inputPath)
+
+	// biome check --write applies both formatting and lint fixes in one pass,
+	// so a separate biome format --write step is unnecessary.
+	const fix = await spawnWithTimeout(
+		[
 			'bunx',
 			'@biomejs/biome',
 			'check',
 			'--write',
 			'--reporter=json',
-			path,
-		])
+			inputPath,
+		],
+		{ timeoutMs: BIOME_TIMEOUT_MS },
+	)
 
-	let lintFixed = 0
-	try {
-		const report = JSON.parse(checkStdout)
-		// Biome check reports number of changed files in summary.changed
-		lintFixed = report.summary?.changed || 0
-	} catch (error) {
-		mcpLogger.warn({
-			message: 'Failed to parse Biome check output',
-			error: error instanceof Error ? error.message : 'Unknown',
-			stdout: checkStdout.substring(0, 200),
-			exitCode: checkExitCode,
-		})
+	if (fix.timedOut) {
+		throw new Error(
+			`Biome check --write timed out after ${BIOME_TIMEOUT_MS / 1000}s`,
+		)
 	}
 
-	mcpLogger.debug({
-		message: 'Biome fix completed',
+	const remaining = await runBiomeCheck(inputPath)
+
+	// Derive fix counts by diffing before/after diagnostics by category.
+	const formatBefore = before.diagnostics.filter((d) =>
+		d.code.startsWith('format'),
+	).length
+	const formatAfter = remaining.diagnostics.filter((d) =>
+		d.code.startsWith('format'),
+	).length
+	const lintBefore = before.diagnostics.filter(
+		(d) => !d.code.startsWith('format'),
+	).length
+	const lintAfter = remaining.diagnostics.filter(
+		(d) => !d.code.startsWith('format'),
+	).length
+
+	const formatFixed = Math.max(0, formatBefore - formatAfter)
+	const lintFixed = Math.max(0, lintBefore - lintAfter)
+
+	return {
+		fixed: formatFixed + lintFixed,
 		formatFixed,
 		lintFixed,
-		totalFixed: formatFixed + lintFixed,
-	})
-
-	// Step 3: Check for remaining issues
-	const remaining = await runBiomeCheck(path)
-
-	return { formatFixed, lintFixed, remaining }
+		remaining,
+	}
 }
 
-/**
- * Run Biome format check (no write).
- *
- * Why: Uses spawnAndCollect to ensure streams are consumed in parallel with
- * waiting for exit, avoiding race conditions that could lose output.
- */
 async function runBiomeFormatCheck(
-	path = '.',
-): Promise<{ formatted: boolean; files: string[] }> {
-	const { stdout, exitCode } = await spawnAndCollect([
-		'bunx',
-		'@biomejs/biome',
-		'format',
-		'--reporter=json',
-		path,
-	])
+	inputPath = '.',
+): Promise<z.infer<typeof formatCheckSchema>> {
+	const { stdout, exitCode, timedOut } = await spawnWithTimeout(
+		['bunx', '@biomejs/biome', 'format', '--reporter=json', inputPath],
+		{ timeoutMs: BIOME_TIMEOUT_MS },
+	)
 
-	if (exitCode === 0) {
-		return { formatted: true, files: [] }
+	if (timedOut) {
+		throw new Error(
+			`Biome format check timed out after ${BIOME_TIMEOUT_MS / 1000}s`,
+		)
 	}
 
-	// Parse unformatted files from output
+	if (exitCode === 0) {
+		return { formatted: true, unformattedFiles: [] }
+	}
+
 	const unformattedFiles: string[] = []
 	try {
-		const report = JSON.parse(stdout)
+		const report = JSON.parse(stdout) as BiomeReport
 		if (report.diagnostics) {
-			for (const d of report.diagnostics) {
-				const file = d.location?.path?.file
+			for (const diagnostic of report.diagnostics) {
+				const file = diagnostic.location?.path?.file
 				if (file && !unformattedFiles.includes(file)) {
 					unformattedFiles.push(file)
 				}
 			}
 		}
 	} catch {
-		// If parse fails, just report not formatted
+		// Parse failures still indicate files are not formatted.
 	}
 
-	return { formatted: false, files: unformattedFiles }
+	return { formatted: false, unformattedFiles }
 }
 
-// --- Logger Adapter ---
-
-const loggerAdapter: Logger = createLoggerAdapter(mcpLogger)
-
-// --- Formatters ---
-
-/**
- * Format lint summary for display
- */
 function formatLintSummary(
 	summary: LintSummary,
-	format: ResponseFormat,
+	format: 'markdown' | 'json',
 ): string {
-	if (format === ResponseFormat.JSON) {
-		return JSON.stringify(summary, null, 2)
+	if (format === 'json') {
+		return JSON.stringify(summary)
 	}
 
 	if (summary.errorCount === 0 && summary.warningCount === 0) {
@@ -271,224 +449,263 @@ function formatLintSummary(
 
 	let output = `Found ${summary.errorCount} errors and ${summary.warningCount} warnings:\n\n`
 
-	summary.diagnostics.forEach((d) => {
-		const icon = d.severity === 'error' ? '[error]' : '[warn]'
-		output += `${icon} ${d.file}:${d.line} [${d.code}]\n`
-		output += `   ${d.message}\n`
-		if (d.suggestion) {
+	for (const diagnostic of summary.diagnostics) {
+		const icon = diagnostic.severity === 'error' ? '[error]' : '[warn]'
+		output += `${icon} ${diagnostic.file}:${diagnostic.line} [${diagnostic.code}]\n`
+		output += `   ${diagnostic.message}\n`
+		if (diagnostic.suggestion) {
 			output += '   Suggestion available\n'
 		}
 		output += '\n'
-	})
+	}
 
 	return output.trim()
 }
 
-/**
- * Format lint fix result for display
- */
 function formatLintFixResult(
-	fixed: number,
-	remaining: LintSummary,
-	format: ResponseFormat,
+	result: z.infer<typeof lintFixSchema>,
+	format: 'markdown' | 'json',
 ): string {
-	if (format === ResponseFormat.JSON) {
-		return JSON.stringify({ fixed, remaining }, null, 2)
+	if (format === 'json') {
+		return JSON.stringify(result)
 	}
 
 	let output = ''
-
-	if (fixed > 0) {
-		output += `Fixed ${fixed} issue(s)\n\n`
+	if (result.fixed > 0) {
+		output += `Fixed ${result.fixed} issue(s)\n\n`
 	}
 
-	if (remaining.errorCount === 0 && remaining.warningCount === 0) {
-		if (fixed === 0) {
-			return 'No issues to fix.'
-		}
-		return `${output}All issues resolved.`.trim()
+	if (
+		result.remaining.errorCount === 0 &&
+		result.remaining.warningCount === 0
+	) {
+		return output ? `${output}All issues resolved.`.trim() : 'No issues to fix.'
 	}
 
-	output += `${remaining.errorCount} error(s) and ${remaining.warningCount} warning(s) remain:\n\n`
+	output += `${result.remaining.errorCount} error(s) and ${result.remaining.warningCount} warning(s) remain:\n\n`
+	for (const diagnostic of result.remaining.diagnostics) {
+		const icon = diagnostic.severity === 'error' ? '[error]' : '[warn]'
+		output += `${icon} ${diagnostic.file}:${diagnostic.line} [${diagnostic.code}]\n`
+		output += `   ${diagnostic.message}\n\n`
+	}
 
-	remaining.diagnostics.forEach((d) => {
-		const icon = d.severity === 'error' ? '[error]' : '[warn]'
-		output += `${icon} ${d.file}:${d.line} [${d.code}]\n`
-		output += `   ${d.message}\n\n`
-	})
+	return output.trim()
+}
 
+function formatFormatCheckResult(
+	result: z.infer<typeof formatCheckSchema>,
+	format: 'markdown' | 'json',
+): string {
+	if (format === 'json') {
+		return JSON.stringify(result)
+	}
+
+	if (result.formatted) {
+		return 'All files are properly formatted.'
+	}
+
+	let output = `${result.unformattedFiles.length} file(s) need formatting:\n\n`
+	for (const file of result.unformattedFiles) {
+		output += `   - ${file}\n`
+	}
+	output += '\nRun biome_lintFix to auto-format these files.'
 	return output.trim()
 }
 
 /**
- * Format format check result for display
+ * Create the biome-runner MCP server.
+ *
+ * Why: factory construction enables direct InMemoryTransport integration tests.
  */
-function formatFormatCheckResult(
-	formatted: boolean,
-	files: string[],
-	format: ResponseFormat,
-): string {
-	if (format === ResponseFormat.JSON) {
-		return JSON.stringify({ formatted, unformattedFiles: files }, null, 2)
-	}
-
-	if (formatted) {
-		return 'All files are properly formatted.'
-	}
-
-	let output = `${files.length} file(s) need formatting:\n\n`
-	files.forEach((f) => {
-		output += `   - ${f}\n`
+export function createBiomeServer(): McpServer {
+	const server = new McpServer({
+		name: 'biome-runner',
+		version: '1.0.2',
 	})
-	output += '\nRun biome_lintFix to auto-format these files.'
 
-	return output.trim()
+	server.registerTool(
+		'biome_lintCheck',
+		{
+			title: 'Biome Lint Checker',
+			description:
+				'Run Biome lint checks (both lint rules and formatting) on a file or directory. Returns error/warning counts and structured diagnostics. Read-only. Does not write fixes. Use biome_lintFix to apply fixes.',
+			inputSchema: z.object({
+				path: z
+					.string()
+					.max(4096)
+					.optional()
+					.describe(
+						'Path to file or directory to check (default: current directory)',
+					),
+				response_format: z
+					.enum(['markdown', 'json'])
+					.optional()
+					.default('json')
+					.describe("Output format: 'markdown' or 'json' (default)"),
+			}),
+			outputSchema: lintSummarySchema,
+			annotations: {
+				readOnlyHint: true,
+				destructiveHint: false,
+				idempotentHint: true,
+				openWorldHint: false,
+			},
+		},
+		async (args): Promise<CallToolResult> => {
+			try {
+				const validatedPath = await validatePathOrDefault(args.path)
+				const summary = await runBiomeCheck(validatedPath)
+				const format = args.response_format ?? 'json'
+				return {
+					isError: false,
+					content: [{ type: 'text', text: formatLintSummary(summary, format) }],
+					structuredContent: toStructured(summary),
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error)
+				return {
+					isError: true,
+					content: [{ type: 'text', text: `Error: ${message}` }],
+				}
+			}
+		},
+	)
+
+	server.registerTool(
+		'biome_lintFix',
+		{
+			title: 'Biome Lint Fixer',
+			description:
+				'Run Biome format/check with --write to auto-fix issues. Returns fixed counts and remaining diagnostics. Writes files. Use biome_lintCheck for read-only inspection.',
+			inputSchema: z.object({
+				path: z
+					.string()
+					.max(4096)
+					.optional()
+					.describe(
+						'Path to file or directory to fix (default: current directory)',
+					),
+				response_format: z
+					.enum(['markdown', 'json'])
+					.optional()
+					.default('json')
+					.describe("Output format: 'markdown' or 'json' (default)"),
+			}),
+			outputSchema: lintFixSchema,
+			annotations: {
+				readOnlyHint: false,
+				destructiveHint: true,
+				idempotentHint: true,
+				openWorldHint: false,
+			},
+		},
+		async (args): Promise<CallToolResult> => {
+			try {
+				const validatedPath = await validatePathOrDefault(args.path)
+				const result = await runBiomeFix(validatedPath)
+				const format = args.response_format ?? 'json'
+				return {
+					isError: false,
+					content: [
+						{ type: 'text', text: formatLintFixResult(result, format) },
+					],
+					structuredContent: toStructured(result),
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error)
+				return {
+					isError: true,
+					content: [{ type: 'text', text: `Error: ${message}` }],
+				}
+			}
+		},
+	)
+
+	server.registerTool(
+		'biome_formatCheck',
+		{
+			title: 'Biome Format Checker',
+			description:
+				'Check whether files are formatted with Biome without writing changes. Returns formatted status and unformatted files. Read-only. Use biome_lintFix to apply formatting.',
+			inputSchema: z.object({
+				path: z
+					.string()
+					.max(4096)
+					.optional()
+					.describe(
+						'Path to file or directory to check (default: current directory)',
+					),
+				response_format: z
+					.enum(['markdown', 'json'])
+					.optional()
+					.default('json')
+					.describe("Output format: 'markdown' or 'json' (default)"),
+			}),
+			outputSchema: formatCheckSchema,
+			annotations: {
+				readOnlyHint: true,
+				destructiveHint: false,
+				idempotentHint: true,
+				openWorldHint: false,
+			},
+		},
+		async (args): Promise<CallToolResult> => {
+			try {
+				const validatedPath = await validatePathOrDefault(args.path)
+				const result = await runBiomeFormatCheck(validatedPath)
+				const format = args.response_format ?? 'json'
+				return {
+					isError: false,
+					content: [
+						{ type: 'text', text: formatFormatCheckResult(result, format) },
+					],
+					structuredContent: toStructured(result),
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error)
+				return {
+					isError: true,
+					content: [{ type: 'text', text: `Error: ${message}` }],
+				}
+			}
+		},
+	)
+
+	return server
 }
 
-// --- Tools ---
+/**
+ * Start the stdio MCP server process.
+ */
+export async function startBiomeServer(): Promise<void> {
+	const server = createBiomeServer()
+	const transport = new StdioServerTransport()
+	let shuttingDown = false
 
-tool(
-	'biome_lintCheck',
-	{
-		description:
-			'Run Biome linter on files and return structured errors. Use this to check for code quality issues without fixing them.',
-		inputSchema: {
-			path: z
-				.string()
-				.optional()
-				.describe(
-					'Path to file or directory to check (default: current directory)',
-				),
-			response_format: z
-				.enum(['markdown', 'json'])
-				.optional()
-				.default('json')
-				.describe("Output format: 'markdown' or 'json' (default)"),
-		},
-		annotations: {
-			readOnlyHint: true,
-			destructiveHint: false,
-			idempotentHint: true,
-			openWorldHint: false,
-		},
-	},
-	wrapToolHandler(
-		async (args: { path?: string }, format: ResponseFormat) => {
-			// Validate path for security
-			const validatedPath = await validatePathOrDefault(args.path)
+	const shutdown = async () => {
+		if (shuttingDown) {
+			return
+		}
+		shuttingDown = true
+		await server.close()
+		process.exit(0)
+	}
 
-			// Run biome check
-			const summary = await runBiomeCheck(validatedPath)
+	transport.onclose = () => {
+		void shutdown()
+	}
 
-			// Format response
-			return formatLintSummary(summary, format)
-		},
-		{
-			toolName: 'biome_lintCheck',
-			logger: loggerAdapter,
-			createCid: createCorrelationId,
-		},
-	),
-)
+	await server.connect(transport)
+	process.stdin.resume()
 
-tool(
-	'biome_lintFix',
-	{
-		description:
-			'Run Biome linter with --write to auto-fix issues. Returns count of fixed issues and any remaining unfixable errors.',
-		inputSchema: {
-			path: z
-				.string()
-				.optional()
-				.describe(
-					'Path to file or directory to fix (default: current directory)',
-				),
-			response_format: z
-				.enum(['markdown', 'json'])
-				.optional()
-				.default('json')
-				.describe("Output format: 'markdown' or 'json' (default)"),
-		},
-		annotations: {
-			readOnlyHint: false,
-			destructiveHint: true,
-			idempotentHint: true,
-			openWorldHint: false,
-		},
-	},
-	wrapToolHandler(
-		async (args: { path?: string }, format: ResponseFormat) => {
-			// Validate path for security - especially critical since this tool writes files
-			const validatedPath = await validatePathOrDefault(args.path)
-
-			// Run biome fix (format + lint)
-			const { formatFixed, lintFixed, remaining } =
-				await runBiomeFix(validatedPath)
-			const totalFixed = formatFixed + lintFixed
-
-			// Format response
-			return formatLintFixResult(totalFixed, remaining, format)
-		},
-		{
-			toolName: 'biome_lintFix',
-			logger: loggerAdapter,
-			createCid: createCorrelationId,
-		},
-	),
-)
-
-tool(
-	'biome_formatCheck',
-	{
-		description:
-			'Check if files are properly formatted without making changes. Returns list of unformatted files.',
-		inputSchema: {
-			path: z
-				.string()
-				.optional()
-				.describe(
-					'Path to file or directory to check (default: current directory)',
-				),
-			response_format: z
-				.enum(['markdown', 'json'])
-				.optional()
-				.default('json')
-				.describe("Output format: 'markdown' or 'json' (default)"),
-		},
-		annotations: {
-			readOnlyHint: true,
-			destructiveHint: false,
-			idempotentHint: true,
-			openWorldHint: false,
-		},
-	},
-	wrapToolHandler(
-		async (args: { path?: string }, format: ResponseFormat) => {
-			// Validate path for security
-			const validatedPath = await validatePathOrDefault(args.path)
-
-			// Run biome format check
-			const { formatted, files } = await runBiomeFormatCheck(validatedPath)
-
-			// Format response
-			return formatFormatCheckResult(formatted, files, format)
-		},
-		{
-			toolName: 'biome_formatCheck',
-			logger: loggerAdapter,
-			createCid: createCorrelationId,
-		},
-	),
-)
-
-// Only start the server when run directly, not when imported by tests
-if (import.meta.main) {
-	startServer('biome-runner', {
-		version: '1.0.0',
-		fileLogging: {
-			enabled: true,
-			subsystems: ['mcp'],
-			level: 'info',
-		},
+	process.on('SIGINT', () => {
+		void shutdown()
 	})
+	process.on('SIGTERM', () => {
+		void shutdown()
+	})
+}
+
+if (import.meta.main) {
+	void startBiomeServer()
 }

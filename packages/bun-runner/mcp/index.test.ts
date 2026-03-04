@@ -1,8 +1,16 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import {
+	_resetGitRootCache,
+	createBunServer,
+	validatePath,
+	validateShellSafePattern,
+} from './index'
 import { parseBunTestOutput } from './parse-utils'
 
 describe('parseBunTestOutput', () => {
-	it('parses all passing tests', () => {
+	test('parses all passing tests', () => {
 		const output = `bun test v1.3.2
 
  3 pass
@@ -18,7 +26,7 @@ Ran 3 tests across 1 file. [50.00ms]`
 		expect(result.failures).toHaveLength(0)
 	})
 
-	it('parses failing tests with pass/fail summary', () => {
+	test('parses failing tests with pass/fail summary', () => {
 		const output = `bun test v1.3.2
 
 ✗ should add numbers [1.23ms]
@@ -43,7 +51,7 @@ Ran 3 tests across 1 file. [50.00ms]`
 		expect(result.failures[0]?.message).toContain('✗ should add numbers')
 	})
 
-	it('parses multiple failures', () => {
+	test('parses multiple failures', () => {
 		const output = `bun test v1.3.2
 
 ✗ test one [1.00ms]
@@ -68,7 +76,7 @@ Ran 3 tests across 1 file. [50.00ms]`
 		expect(result.failures[1]?.line).toBe(15)
 	})
 
-	it('handles FAIL keyword', () => {
+	test('handles FAIL keyword', () => {
 		const output = `FAIL src/index.test.ts
   error: something went wrong
 
@@ -82,7 +90,7 @@ Ran 3 tests across 1 file. [50.00ms]`
 		expect(result.failures[0]?.message).toContain('FAIL')
 	})
 
-	it('handles empty output', () => {
+	test('handles empty output', () => {
 		const result = parseBunTestOutput('')
 
 		expect(result.passed).toBe(0)
@@ -91,7 +99,7 @@ Ran 3 tests across 1 file. [50.00ms]`
 		expect(result.failures).toHaveLength(0)
 	})
 
-	it('extracts stack traces', () => {
+	test('extracts stack traces', () => {
 		const output = `✗ my test
   error: oops
       at someFunc (/path/file.ts:10:5)
@@ -106,7 +114,7 @@ Ran 3 tests across 1 file. [50.00ms]`
 		expect(result.failures[0]?.stack).toContain('at anotherFunc')
 	})
 
-	it('parses Bun v1.3+ format with (fail) marker', () => {
+	test('parses Bun v1.3+ format with (fail) marker', () => {
 		// Bun v1.3+ shows error/diff first, then stack, then (fail) marker
 		const output = `bun test v1.3.3 (274e01c7)
 
@@ -144,7 +152,7 @@ error: expect(received).toEqual(expected)
 		expect(result.failures[0]?.message).toContain('"name": "Alice"')
 	})
 
-	it('parses multiple failures in Bun v1.3+ format', () => {
+	test('parses multiple failures in Bun v1.3+ format', () => {
 		const output = `bun test v1.3.3 (274e01c7)
 
 error: expect(received).toEqual(expected)
@@ -177,7 +185,7 @@ Received: "world"
 		expect(result.failures[1]?.message).toContain('test two')
 	})
 
-	it('ignores console.error output when summary shows 0 fail', () => {
+	test('ignores console.error output when summary shows 0 fail', () => {
 		// This is the key fix for issue #11 - console.error from tests
 		// should not create spurious failures when summary says 0 fail
 		const output = `bun test v1.3.2
@@ -196,7 +204,7 @@ error: Another console.error message
 		expect(result.failures).toHaveLength(0)
 	})
 
-	it('captures real failures even when console.error is present', () => {
+	test('captures real failures even when console.error is present', () => {
 		const output = `bun test v1.3.2
 
 error: Console noise before test
@@ -217,7 +225,7 @@ Received: 4
 		expect(result.failures[0]?.message).toContain('actual failing test')
 	})
 
-	it('handles v1.3+ format with mixed (pass) and (fail) markers', () => {
+	test('handles v1.3+ format with mixed (pass) and (fail) markers', () => {
 		const output = `bun test v1.3.3
 
 error: Logging is broken
@@ -237,7 +245,7 @@ error: actual test error
 		expect(result.failures[0]?.file).toBe('/path/fail.ts')
 	})
 
-	it('discards orphan error: blocks without (fail) marker in v1.3+ format', () => {
+	test('discards orphan error: blocks without (fail) marker in v1.3+ format', () => {
 		// Orphan error: lines that are never terminated by (fail)
 		// should be discarded as they're likely console.error output
 		const output = `bun test v1.3.2
@@ -256,7 +264,7 @@ Some additional logging
 		expect(result.failures).toHaveLength(0)
 	})
 
-	it('handles large test suite with console.error noise', () => {
+	test('handles large test suite with console.error noise', () => {
 		// Simulates the real-world scenario from side-quest-marketplace
 		// where 3387 tests pass but console.error creates false positives
 		const output = `bun test v1.3.2
@@ -276,5 +284,90 @@ Ran 3387 tests across 150 files. [25.00s]`
 		expect(result.passed).toBe(3387)
 		expect(result.failed).toBe(0)
 		expect(result.failures).toHaveLength(0)
+	})
+})
+
+describe('validation helpers', () => {
+	test('rejects path null bytes', async () => {
+		await expect(validatePath('packages/bun-runner\x00')).rejects.toThrow('Path contains null byte')
+	})
+
+	test('rejects traversal paths outside repository', async () => {
+		await expect(validatePath('../../../etc/passwd')).rejects.toThrow('Path outside repository')
+	})
+
+	test('rejects unsafe shell patterns', () => {
+		expect(() => validateShellSafePattern('--preload=./malicious.ts')).toThrow(
+			'Pattern must not start with a dash',
+		)
+		expect(() => validateShellSafePattern('$(whoami)')).toThrow(
+			'Pattern contains unsafe characters',
+		)
+	})
+})
+
+describe('bun tools integration', () => {
+	test('exposes all three tools via tools/list', async () => {
+		const server = createBunServer()
+		const client = new Client({ name: 'bun-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		const list = await client.listTools()
+
+		const runTests = list.tools.find((entry) => entry.name === 'bun_runTests')
+		expect(runTests).toBeDefined()
+		expect(runTests?.title).toBe('Bun Test Runner')
+		expect(runTests?.annotations?.readOnlyHint).toBe(true)
+		expect(runTests?.outputSchema).toBeDefined()
+
+		const testFile = list.tools.find((entry) => entry.name === 'bun_testFile')
+		expect(testFile).toBeDefined()
+		expect(testFile?.title).toBe('Bun Single File Test Runner')
+		expect(testFile?.annotations?.readOnlyHint).toBe(true)
+		expect(testFile?.outputSchema).toBeDefined()
+
+		const testCoverage = list.tools.find((entry) => entry.name === 'bun_testCoverage')
+		expect(testCoverage).toBeDefined()
+		expect(testCoverage?.title).toBe('Bun Test Coverage Reporter')
+		expect(testCoverage?.annotations?.readOnlyHint).toBe(true)
+		expect(testCoverage?.outputSchema).toBeDefined()
+
+		await Promise.all([client.close(), server.close()])
+	})
+
+	test('callTool returns structuredContent for runTests', async () => {
+		_resetGitRootCache()
+		const server = createBunServer()
+		const client = new Client({ name: 'bun-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		const result = await client.callTool({
+			name: 'bun_runTests',
+			arguments: {
+				pattern: 'nonesuchpattern',
+				response_format: 'json',
+			},
+		})
+
+		expect(result.isError).toBe(false)
+		expect(result.structuredContent).toBeDefined()
+
+		const summary = result.structuredContent as {
+			passed: number
+			failed: number
+			total: number
+			failures: Array<{ file: string; message: string; line: number | null }>
+		}
+
+		expect(typeof summary.passed).toBe('number')
+		expect(typeof summary.failed).toBe('number')
+		expect(typeof summary.total).toBe('number')
+		expect(Array.isArray(summary.failures)).toBe(true)
+
+		await Promise.all([client.close(), server.close()])
 	})
 })
