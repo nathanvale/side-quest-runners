@@ -9,6 +9,7 @@
  * and reports errors in a Claude-friendly format.
  */
 
+import { readFileSync } from 'node:fs'
 import { access, realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -35,6 +36,7 @@ export interface TscError {
 	file: string
 	line: number
 	col: number
+	code: string
 	message: string
 }
 
@@ -62,11 +64,23 @@ const tscOutputSchema: z.ZodType<TscOutput> = z.object({
 			file: z.string(),
 			line: z.number(),
 			col: z.number(),
+			code: z.string(),
 			message: z.string(),
 		}),
 	),
 	errorCount: z.number(),
 })
+
+/**
+ * Resolve package version from package.json at module load.
+ *
+ * Why: keeps MCP server metadata aligned with published package version
+ * without requiring manual code updates each release.
+ */
+const PACKAGE_VERSION: string = JSON.parse(
+	readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).version
+export const SERVER_VERSION = PACKAGE_VERSION
 
 let _gitRootPromise: Promise<string> | null = null
 
@@ -214,16 +228,17 @@ async function resolveNearestAncestor(resolvedPath: string): Promise<string> {
 export function parseTscOutput(output: string): TscParseResult {
 	const errors: TscError[] = []
 
-	const errorPattern = /^(.+?)\((\d+),(\d+)\):\s*error\s+TS\d+:\s*(.+)$/gm
+	const errorPattern = /^(.+?)\((\d+),(\d+)\):\s*error\s+(TS\d+):\s*(.+)$/gm
 	const matches = output.matchAll(errorPattern)
 
 	for (const match of matches) {
-		const [, file, line, col, message] = match
-		if (file && line && col && message) {
+		const [, file, line, col, code, message] = match
+		if (file && line && col && code && message) {
 			errors.push({
 				file,
 				line: Number.parseInt(line, 10),
 				col: Number.parseInt(col, 10),
+				code,
 				message,
 			})
 		}
@@ -416,7 +431,7 @@ export function formatTscMarkdown(output: TscOutput): string {
 export function createTscServer(): McpServer {
 	const server = new McpServer({
 		name: 'tsc-runner',
-		version: '1.0.2',
+		version: SERVER_VERSION,
 	})
 
 	server.registerTool(

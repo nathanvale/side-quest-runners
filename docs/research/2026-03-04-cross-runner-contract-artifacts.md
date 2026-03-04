@@ -140,9 +140,10 @@ Status: already correct, no change needed.
           "file": { "type": "string", "description": "File path relative to cwd" },
           "line": { "type": "integer", "description": "1-based line number" },
           "col": { "type": "integer", "description": "1-based column number" },
+          "code": { "type": "string", "description": "TypeScript diagnostic code (for example TS2345)" },
           "message": { "type": "string", "description": "Error message from tsc" }
         },
-        "required": ["file", "line", "col", "message"]
+        "required": ["file", "line", "col", "code", "message"]
       },
       "description": "Array of type errors found"
     },
@@ -373,8 +374,15 @@ Status: already correct.
         },
         "uncovered": {
           "type": "array",
-          "items": { "type": "string" },
-          "description": "Files with coverage below 50%, formatted as 'path (X%)'"
+          "items": {
+            "type": "object",
+            "properties": {
+              "file": { "type": "string", "description": "File path with low coverage" },
+              "percent": { "type": "number", "description": "Coverage percent for this file (0-100)" }
+            },
+            "required": ["file", "percent"]
+          },
+          "description": "Files with coverage below 50% and their coverage percentages"
         }
       },
       "required": ["percent", "uncovered"]

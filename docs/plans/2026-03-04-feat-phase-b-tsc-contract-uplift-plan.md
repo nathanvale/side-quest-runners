@@ -1,7 +1,7 @@
 ---
 title: "Phase B: tsc-runner Contract Uplift"
 type: feat
-status: active
+status: completed
 date: 2026-03-04
 priority: p1
 origin: docs/brainstorms/2026-03-04-tsc-runner-uplift.md
@@ -47,16 +47,16 @@ From **todo 012** (missing outputSchema definitions):
 
 ## Acceptance Criteria
 
-- [ ] Description follows what/when/returns/boundaries from contract artifacts
-- [ ] `title` set to `"TypeScript Type Checker"`
-- [ ] `outputSchema` validates against actual response shape
-- [ ] Annotations correct (`readOnlyHint: true`, `idempotentHint: true`)
-- [ ] TS error codes captured in parsed output (e.g., `TS2345`) as `code` field
-- [ ] JSON output compact (no pretty-print whitespace)
-- [ ] No em dashes in output
-- [ ] Server version read from `package.json` (not hardcoded)
-- [ ] Contract tests: response validates against `outputSchema` at 100%
-- [ ] `bun_testCoverage` uncovered field split into `{ file, percent }` in outputSchema definition (applied in Phase E)
+- [x] Description follows what/when/returns/boundaries from contract artifacts
+- [x] `title` set to `"TypeScript Type Checker"`
+- [x] `outputSchema` validates against actual response shape
+- [x] Annotations correct (`readOnlyHint: true`, `idempotentHint: true`)
+- [x] TS error codes captured in parsed output (e.g., `TS2345`) as `code` field
+- [x] JSON output compact (no pretty-print whitespace)
+- [x] No em dashes in output
+- [x] Server version read from `package.json` (not hardcoded)
+- [x] Contract tests: response validates against `outputSchema` at 100%
+- [x] `bun_testCoverage` uncovered field split into `{ file, percent }` in outputSchema definition (applied in Phase E)
 
 ## Sources
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { rm, symlink } from 'node:fs/promises'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -8,6 +9,7 @@ import {
 	createTscServer,
 	formatTscMarkdown,
 	parseTscOutput,
+	SERVER_VERSION,
 	validatePath,
 	validatePathOrDefault,
 } from './index'
@@ -23,9 +25,11 @@ src/utils.ts(20,3): error TS2345: Argument of type 'string' is not assignable to
 		expect(result.errors[0]?.file).toBe('src/index.ts')
 		expect(result.errors[0]?.line).toBe(10)
 		expect(result.errors[0]?.col).toBe(5)
+		expect(result.errors[0]?.code).toBe('TS2322')
 		expect(result.errors[0]?.message).toContain("Type 'string'")
 		expect(result.errors[1]?.file).toBe('src/utils.ts')
 		expect(result.errors[1]?.line).toBe(20)
+		expect(result.errors[1]?.code).toBe('TS2345')
 	})
 
 	test('handles clean output (no errors)', () => {
@@ -53,9 +57,16 @@ describe('formatTscMarkdown', () => {
 					file: 'src/index.ts',
 					line: 10,
 					col: 5,
+					code: 'TS2322',
 					message: "Type 'string' is not assignable to type 'number'.",
 				},
-				{ file: 'src/utils.ts', line: 20, col: 3, message: 'Argument type mismatch.' },
+				{
+					file: 'src/utils.ts',
+					line: 20,
+					col: 3,
+					code: 'TS2345',
+					message: 'Argument type mismatch.',
+				},
 			],
 			errorCount: 2,
 		}
@@ -104,6 +115,14 @@ describe('path validation', () => {
 })
 
 describe('tsc_check integration', () => {
+	test('syncs MCP server version with package.json', () => {
+		const packageJson = JSON.parse(
+			readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+		) as { version: string }
+
+		expect(SERVER_VERSION).toBe(packageJson.version)
+	})
+
 	test('exposes title/outputSchema/annotations via tools/list', async () => {
 		const server = createTscServer()
 		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
@@ -150,7 +169,13 @@ describe('tsc_check integration', () => {
 				configPath: string
 				timedOut: boolean
 				exitCode: number
-				errors: Array<{ file: string; line: number; col: number; message: string }>
+				errors: Array<{
+					file: string
+					line: number
+					col: number
+					code: string
+					message: string
+				}>
 				errorCount: number
 			}
 
