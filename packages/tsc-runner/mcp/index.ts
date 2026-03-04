@@ -80,7 +80,7 @@ const tscOutputSchema: z.ZodType<TscOutput> = z.object({
 const PACKAGE_VERSION: string = JSON.parse(
 	readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ).version
-export const SERVER_VERSION = PACKAGE_VERSION
+export const SERVER_VERSION: string = PACKAGE_VERSION
 
 let _gitRootPromise: Promise<string> | null = null
 
