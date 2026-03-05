@@ -53,7 +53,8 @@ function assertObject(
 async function createSandboxRoot(prefix: string): Promise<string> {
 	// Keep smoke fixtures inside repo path boundaries required by runner validators.
 	// Bun test ignores this directory via bunfig.toml testPathIgnorePatterns.
-	const parent = path.join(REPO_ROOT, '.smoke-sandboxes')
+	// Do not place under gitignored or dot-directories because Biome can skip those.
+	const parent = path.join(REPO_ROOT, 'smoke-sandboxes')
 	await mkdir(parent, { recursive: true })
 	const root = await mkdtemp(path.join(parent, `${prefix}-`))
 	return root
