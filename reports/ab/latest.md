@@ -1,6 +1,6 @@
 # Discoverability AB Latest
 
-- Timestamp: 2026-03-05T18:33:07.396Z
+- Timestamp: 2026-03-05T18:35:33.019Z
 - Suite: minimal (minimal-v1)
 - Model: dry-run
 - Repeats: 3
@@ -20,4 +20,4 @@
 ## Artifacts
 
 - Trend CSV: `reports/ab/trend.csv`
-- Archive JSON: `reports/ab/archive/2026-03-05T18-33-07-396Z.json`
+- Archive JSON: `reports/ab/archive/2026-03-05T18-35-33-019Z.json`

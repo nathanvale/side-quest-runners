@@ -106,7 +106,7 @@ JSON already exists as the raw format. The trend CSV is a single-line append per
 
 **Architecture (from architecture review):**
 - Risk of overloading eval-ab.ts with too many responsibilities (mode switching, CSV generation, markdown templating, threshold evaluation, alerting). Consider extracting into companion modules:
-  ```
+  ```text
   scripts/discoverability/
     eval-ab.ts          # Evaluator (exists, extend with mode flag)
     format-report.ts    # CSV + markdown generation (new)

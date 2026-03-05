@@ -10,12 +10,14 @@ Use `workflow_dispatch` on `.github/workflows/discoverability-ab.yml`.
 Optional input:
 - `force_baseline=true`: collect and commit trend data, but skip alert evaluation for that run.
 
-## Nightly Schedule
+## Weekday Schedule
 
 The workflow runs on:
 - `30 18 * * 0-4` UTC
 
-This maps to weekday 04:30 in Melbourne for most of the year.
+This maps to weekday mornings in Melbourne:
+- 04:30 during AEST (UTC+10)
+- 05:30 during AEDT (UTC+11)
 
 ## Alert Rules
 

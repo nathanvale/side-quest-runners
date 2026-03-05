@@ -72,11 +72,15 @@ async function withRunnerClient<T>(args: {
 		stderr: 'pipe',
 	})
 
-	await client.connect(transport)
 	try {
+		await client.connect(transport)
 		return await args.run(client)
 	} finally {
-		await client.close()
+		try {
+			await client.close()
+		} catch {
+			// Ignore close failure; still close transport.
+		}
 		await transport.close()
 	}
 }

@@ -430,7 +430,8 @@ function updateLastRow(
 	const rows = records.map((record) => record.values)
 	rows[rows.length - 1] = values
 
-	return `${[header, ...rows].map(encodeCsvLine).join('\n')}\n`
+	const encodedRows = rows.map((row) => encodeCsvLine(row))
+	return `${[header.join(','), ...encodedRows].join('\n')}\n`
 }
 
 async function main(): Promise<void> {

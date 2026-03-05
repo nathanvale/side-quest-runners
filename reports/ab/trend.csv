@@ -1,2 +1,4 @@
 "timestamp","suite","suite_version","model","repeats","prompt_count","canary_prompt_count","evaluation_count","total_tokens","before_accuracy","after_accuracy","delta_accuracy","before_mean_extra_calls","after_mean_extra_calls","delta_mean_extra_calls","threshold_status","failed","alert_streak","dry_run"
+"timestamp","suite","suite_version","model","repeats","prompt_count","canary_prompt_count","evaluation_count","total_tokens","before_accuracy","after_accuracy","delta_accuracy","before_mean_extra_calls","after_mean_extra_calls","delta_mean_extra_calls","threshold_status","failed","alert_streak","dry_run"
 "2026-03-05T18:33:07.396Z","minimal","minimal-v1","dry-run","3","10","3","60","0","1.000000","1.000000","0.000000","0.000000","0.000000","0.000000","dry_run","false","0","true"
+"2026-03-05T18:35:33.019Z","minimal","minimal-v1","dry-run","3","10","3","60","0","1.000000","1.000000","0.000000","0.000000","0.000000","0.000000","dry_run","false","0","true"

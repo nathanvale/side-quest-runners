@@ -616,7 +616,8 @@ async function main(): Promise<void> {
 	)
 	const temperature = parseFloatArg('--temperature', 0.2)
 	const seedBase = parseIntArg('--seedBase', 42_000)
-	const requestedRepeats = parseIntArg('--repeats', 3)
+	const defaultRepeats = suite === 'stress' ? 2 : 3
+	const requestedRepeats = parseIntArg('--repeats', defaultRepeats)
 	const repeats = suite === 'minimal' ? MINIMAL_SEEDS.length : requestedRepeats
 	const outPath = parseArg(
 		'--out',

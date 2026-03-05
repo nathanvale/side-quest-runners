@@ -76,6 +76,14 @@ jobs:
             --out=reports/ab/thresholds.json \
             $EXTRA
 
+      - name: Validate threshold output
+        if: always()
+        run: |
+          if [ ! -s reports/ab/thresholds.json ]; then
+            echo "::error::reports/ab/thresholds.json missing or empty; threshold evaluation likely failed."
+            exit 1
+          fi
+
       - name: Upload archive artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
