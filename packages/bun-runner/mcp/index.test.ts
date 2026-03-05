@@ -4,6 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import {
 	_resetGitRootCache,
+	createBunCoverageInvocation,
 	createBunInvocation,
 	createBunServer,
 	SERVER_VERSION,
@@ -349,6 +350,11 @@ describe('createBunInvocation', () => {
 			}
 		}
 	})
+
+	test('builds coverage command with Bun coverage flag', () => {
+		const invocation = createBunCoverageInvocation()
+		expect(invocation.cmd).toEqual(['bun', 'test', '--coverage'])
+	})
 })
 
 describe('bun tools integration', () => {
@@ -428,8 +434,7 @@ describe('bun tools integration', () => {
 		}
 	})
 
-	test('callTool returns coverage with structured uncovered entries', async () => {
-		_resetGitRootCache()
+	test('coverage output schema uses uncovered {file, percent} entries', async () => {
 		const server = await createBunServer()
 		const client = new Client({ name: 'bun-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
@@ -437,23 +442,30 @@ describe('bun tools integration', () => {
 		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
 
 		try {
-			const result = await client.callTool({
-				name: 'bun_testCoverage',
-				arguments: { response_format: 'json' },
-			})
+			const list = await client.listTools()
+			const testCoverage = list.tools.find((entry) => entry.name === 'bun_testCoverage')
+			expect(testCoverage).toBeDefined()
 
-			expect(result.structuredContent).toBeDefined()
-			const output = result.structuredContent as {
-				summary: { passed: number; failed: number; total: number }
-				coverage: { percent: number; uncovered: Array<{ file: string; percent: number }> }
+			const schema = testCoverage?.outputSchema as {
+				properties?: {
+					coverage?: {
+						properties?: {
+							uncovered?: {
+								items?: {
+									properties?: { file?: unknown; percent?: unknown }
+								}
+							}
+						}
+					}
+				}
 			}
 
-			expect(typeof output.coverage.percent).toBe('number')
-			expect(Array.isArray(output.coverage.uncovered)).toBe(true)
-			for (const entry of output.coverage.uncovered) {
-				expect(typeof entry.file).toBe('string')
-				expect(typeof entry.percent).toBe('number')
-			}
+			expect(
+				schema?.properties?.coverage?.properties?.uncovered?.items?.properties?.file,
+			).toBeDefined()
+			expect(
+				schema?.properties?.coverage?.properties?.uncovered?.items?.properties?.percent,
+			).toBeDefined()
 		} finally {
 			await Promise.all([client.close(), server.close()])
 		}

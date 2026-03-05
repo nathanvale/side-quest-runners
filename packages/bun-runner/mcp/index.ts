@@ -345,6 +345,30 @@ export function createBunInvocation(pattern?: string): {
 	}
 }
 
+/**
+ * Build Bun coverage invocation command and sanitized environment.
+ *
+ * Why: coverage mode is a Bun flag and must not be passed as a positional test
+ * pattern, or coverage reporting silently degrades.
+ */
+export function createBunCoverageInvocation(): {
+	cmd: string[]
+	env: Record<string, string>
+} {
+	const env: Record<string, string> = { CI: 'true' }
+	for (const key of BUN_ENV_ALLOWLIST) {
+		const value = process.env[key]
+		if (typeof value === 'string' && value.length > 0) {
+			env[key] = value
+		}
+	}
+
+	return {
+		cmd: ['bun', 'test', '--coverage'],
+		env,
+	}
+}
+
 function createBunStderrWritableStream(): WritableStream {
 	let writer: ReturnType<(typeof Bun.stderr)['writer']> | null = null
 
@@ -602,7 +626,7 @@ async function runBunTests(
 async function runBunTestCoverage(): Promise<
 	z.infer<typeof testCoverageSchema>
 > {
-	const invocation = createBunInvocation('--coverage')
+	const invocation = createBunCoverageInvocation()
 	const { stdout, stderr, timedOut } = await spawnWithTimeout(
 		invocation.cmd,
 		COVERAGE_TIMEOUT_MS,
