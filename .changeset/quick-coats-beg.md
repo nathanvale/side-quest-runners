@@ -4,8 +4,14 @@
 '@side-quest/tsc-runner': patch
 ---
 
-fix(runners): stabilize smoke sandbox behavior and tighten smoke assertions
+feat(runners): complete phase E parity and strengthen smoke validation
 
-Keep smoke sandboxes in a repo-local ignored path for runner path validation,
-exclude that path from Bun test discovery, and harden smoke checks/docs around
-post-fix formatting assertions and contributor guidance.
+Complete cross-runner parity updates and harden integration safety:
+
+- biome-runner: add `biome_lintFix` integration coverage and behavior refinements
+- bun-runner: correct coverage invocation semantics and related test expectations
+- tsc-runner: align runner behavior with cross-runner rollout requirements
+- smoke harness: add cross-runner stdio sandbox checks and CI/validate integration
+
+This release focuses on runner reliability and end-to-end validation confidence
+across all three MCP runners.
