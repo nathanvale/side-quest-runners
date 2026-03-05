@@ -51,6 +51,12 @@ function toStructured(value: object): Record<string, unknown> {
 
 const TEST_TIMEOUT_MS = 30_000
 const COVERAGE_TIMEOUT_MS = 60_000
+const configuredCoverageLowThreshold = Number.parseFloat(
+	process.env.BUN_COVERAGE_LOW_THRESHOLD ?? '50',
+)
+const COVERAGE_LOW_THRESHOLD = Number.isFinite(configuredCoverageLowThreshold)
+	? configuredCoverageLowThreshold
+	: 50
 const BUN_ENV_ALLOWLIST = [
 	'PATH',
 	'HOME',
@@ -295,10 +301,6 @@ function hasShellUnsafeCharacters(value: string): boolean {
 			continue
 		}
 		if (unsafe.has(char)) {
-			return true
-		}
-		const code = value.charCodeAt(index)
-		if (code <= 0x1f || code === 0x7f) {
 			return true
 		}
 	}
@@ -632,7 +634,7 @@ async function runBunTestCoverage(): Promise<
 	z.infer<typeof testCoverageSchema>
 > {
 	const invocation = createBunCoverageInvocation()
-	const { stdout, stderr, timedOut } = await spawnWithTimeout(
+	const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
 		invocation.cmd,
 		COVERAGE_TIMEOUT_MS,
 		{ env: invocation.env },
@@ -646,7 +648,14 @@ async function runBunTestCoverage(): Promise<
 	}
 
 	const output = `${stdout}\n${stderr}`
-	const summary = normalizeSummary(parseBunTestOutput(output))
+	const parsed = parseBunTestOutput(output)
+	if (exitCode !== 0 && parsed.total === 0 && parsed.failed === 0) {
+		throw new BunToolError(
+			'SPAWN_FAILURE',
+			`bun test --coverage failed: ${stderr.trim() || stdout.trim() || 'missing output'}`,
+		)
+	}
+	const summary = normalizeSummary(parsed)
 	const coverageMatch = output.match(/(\d+(?:\.\d+)?)\s*%/)
 	const percent = coverageMatch?.[1] ? Number.parseFloat(coverageMatch[1]) : 0
 
@@ -658,7 +667,7 @@ async function runBunTestCoverage(): Promise<
 		}
 		const file = match[1].trim()
 		const fileCoverage = Number.parseFloat(match[2])
-		if (fileCoverage < 50 && file.endsWith('.ts')) {
+		if (fileCoverage < COVERAGE_LOW_THRESHOLD && file.endsWith('.ts')) {
 			uncovered.push({ file, percent: fileCoverage })
 		}
 	}
@@ -720,7 +729,7 @@ function formatCoverageResult(
 	output += `Coverage: ${result.coverage.percent}%\n`
 
 	if (result.coverage.uncovered.length > 0) {
-		output += '\nFiles with low coverage (<50%):\n'
+		output += `\nFiles with low coverage (<${COVERAGE_LOW_THRESHOLD}%):\n`
 		for (const entry of result.coverage.uncovered) {
 			output += `   - ${entry.file} (${entry.percent}%)\n`
 		}

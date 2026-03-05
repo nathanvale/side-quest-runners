@@ -1,43 +1,90 @@
-# bun-typescript-starter
+# side-quest-runners
 
-A production-ready TypeScript/Bun project template with CI/CD, linting, testing, and publishing infrastructure.
+MCP server runners for Claude Code -- bun test, biome lint/format, tsc typecheck.
 
-**Stack:** TypeScript, Bun, Biome, Vitest, Changesets
-
----
-
-## Quick Start
-
-```bash
-# After "Use this template" on GitHub
-bun run setup    # Interactive configuration
-bun install      # Install dependencies (if not done by setup)
-bun dev          # Watch mode development
-bun test         # Run tests
-bun run build    # Build for production
-```
+**Stack:** TypeScript, Bun, Biome, Changesets
 
 ---
 
-## Key Commands
+## Commands
 
 ```bash
-# Development
-bun dev                  # Watch mode
-bun build                # Build TypeScript to dist/
-
 # Quality
 bun run check            # Biome lint + format (write mode)
-bun typecheck            # TypeScript type checking
-bun run validate         # Full quality check (lint + types + build + test)
+bun run lint             # Biome lint only
+bun run typecheck        # TypeScript type checking (all packages)
+bun run validate         # Full gate: lint + typecheck + build + test + smoke
 
 # Testing
-bun test                 # Run all tests
-bun test --coverage      # With coverage report
+bun test                 # Run all package tests (bun:test)
+bun test:smoke           # Smoke tests (subprocess stdio transport)
+bun test:ci              # Tests with TF_BUILD=true (CI-style output)
+bun test:coverage        # Tests with coverage
+
+# Build
+bun run build            # Build all packages (bunup)
+bun run clean            # Clean all dist/ directories
+
+# Single package
+bun run --filter bun-runner test
+bun run --filter biome-runner build
+bun run --filter tsc-runner typecheck
 
 # Releases
-bun version:gen          # Create changeset
+bun run version:pre      # Create changeset version bump
+bun run release          # Publish with provenance
 ```
+
+---
+
+## Architecture
+
+Bun workspace monorepo with 3 independent packages under `packages/`:
+
+```
+packages/
+  biome-runner/    @side-quest/biome-runner  - Biome lint + format diagnostics
+  bun-runner/      @side-quest/bun-runner    - Bun test runner
+  tsc-runner/      @side-quest/tsc-runner    - TypeScript type checker
+```
+
+Each package is a **single-file MCP server** (~1000 lines) at `mcp/index.ts`. No shared utility package -- each server is fully self-contained.
+
+### MCP Server Pattern
+
+Every server follows the same structure:
+
+1. **Factory function** -- `createXServer()` returns a configured `McpServer` instance (used by tests)
+2. **Stdio entry** -- `startXServer()` connects via `StdioServerTransport`
+3. **Entry guard** -- `if (import.meta.main) { void startXServer() }`
+
+```
+mcp/index.ts        # Server implementation (~1000 lines)
+mcp/index.test.ts   # Colocated tests
+```
+
+---
+
+## Test Architecture
+
+Uses **Bun's built-in test runner** (`bun:test`), NOT Vitest.
+
+Tests are colocated at `mcp/index.test.ts` with three tiers:
+
+1. **Unit tests** -- pure functions (parsers, formatters, validators)
+2. **Integration tests** -- full MCP round-trips via `InMemoryTransport` (calls `createXServer()`)
+3. **Smoke tests** -- subprocess via `StdioClientTransport` (validates the built binary works end-to-end)
+
+Smoke tests live at `scripts/smoke/run-smoke.ts` and run via `bun test:smoke`.
+
+---
+
+## Key Patterns
+
+- **Structured output** -- tools return both `content` (text) and `structuredContent` (JSON), with `response_format` parameter for caller preference
+- **Path validation** -- security boundary that rejects path traversal and symlink escapes
+- **`spawnWithTimeout`** -- child process execution with configurable timeout, SIGTERM then SIGKILL escalation
+- **LogTape fingersCrossed** -- observability handler that buffers debug logs and flushes on error
 
 ---
 
@@ -69,88 +116,28 @@ chore(deps): update dependencies
 
 ---
 
-## Template Development Workflow
+## CI/CD Workflows
 
-When dogfooding this template (testing it in a real project), use this workflow to push fixes back upstream.
-
-### Setup (one-time)
-
-```bash
-# Create a new repo from template via GitHub UI
-# Clone it locally
-git clone git@github.com:youruser/your-new-project.git
-cd your-new-project
-
-# Add template as upstream remote
-git remote add template git@github.com:nathanvale/bun-typescript-starter.git
-```
-
-### Pushing Fixes Upstream
-
-When you find an issue in the template while using it:
-
-```bash
-# 1. Fix the issue in your dogfood project
-# 2. Commit the fix
-git add .
-git commit -m "fix: description of the fix"
-
-# 3. Push to your project's origin (optional, for your project)
-git push origin main
-
-# 4. Push to template upstream
-git push template HEAD:main
-```
-
-### Pulling Template Updates
-
-```bash
-# Fetch latest from template
-git fetch template
-
-# Merge template changes into your project
-git merge template/main --allow-unrelated-histories
-```
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `pr-quality.yml` | PR | Lint, types, tests, smoke |
+| `commitlint.yml` | PR | Validate commit messages |
+| `workflow-lint.yml` | PR | Lint GitHub Actions workflows |
+| `package-hygiene.yml` | PR | publint, attw, pack dry-run |
+| `node-compat.yml` | PR | Verify Node.js compatibility |
+| `publish.yml` | Push to main | Version packages PR |
+| `release.yml` | Push to main | Publish to npm with provenance |
+| `security.yml` | Schedule/PR | CodeQL + dependency review |
 
 ---
 
 ## Publishing
 
-This template uses **OIDC Trusted Publishing** for npm releases.
+Uses **Changesets** for versioning and **OIDC Trusted Publishing** for npm releases.
 
-### First Publish (requires NPM_TOKEN)
-
-1. Add `NPM_TOKEN` secret to GitHub repo settings
-2. Create a changeset: `bun version:gen`
-3. Push to main, merge the "Version Packages" PR
-
-### After First Publish (OIDC)
-
-1. Configure trusted publisher at: https://www.npmjs.com/package/YOUR_PACKAGE/access
-2. Remove `NPM_TOKEN` secret (no longer needed)
-3. Future publishes authenticate via GitHub OIDC
-
----
-
-## CI/CD Workflows
-
-| Workflow | Trigger | Purpose |
-|----------|---------|---------|
-| `pr-quality.yml` | PR | Lint, types, tests |
-| `publish.yml` | Push to main | Version & publish |
-| `commitlint.yml` | PR | Validate commit messages |
-| `security.yml` | Schedule/PR | CodeQL + Trivy scans |
-
----
-
-## Customization
-
-After running `bun run setup`:
-
-1. **Add source files** in `src/`
-2. **Add tests** alongside source (`*.test.ts`)
-3. **Update exports** in `bunup.config.ts`
-4. **Configure path aliases** in `tsconfig.json` if needed
+1. Create a changeset: `bun run version:pre`
+2. Push to main -- CI creates a "Version Packages" PR
+3. Merge the PR -- CI publishes with `--provenance` via GitHub OIDC
 
 ---
 
@@ -167,3 +154,4 @@ After running `bun run setup`:
 1. Push directly to main (pre-push hook blocks)
 2. Skip validation before commits
 3. Use destructive git commands (`reset --hard`, `push --force`)
+4. Create nested `biome.json` files -- monorepo uses single root config

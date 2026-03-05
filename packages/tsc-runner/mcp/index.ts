@@ -909,6 +909,26 @@ export async function createTscServer(
 						}
 					} catch (error) {
 						const failure = toToolFailure(error)
+						const failureOutput: TscOutput = {
+							cwd: process.cwd(),
+							configPath: '',
+							timedOut: failure.code === 'TIMEOUT',
+							exitCode: 1,
+							errors: [
+								{
+									file: '',
+									line: 1,
+									col: 1,
+									code: failure.code,
+									message: failure.message,
+								},
+							],
+							errorCount: 1,
+							remediationHint: failure.remediationHint,
+							parseWarning:
+								'Tool failed before compiler diagnostics could be produced.',
+							rawStderr: failure.message,
+						}
 						toolLogger.error('tsc_check failed', {
 							code: failure.code,
 							message: failure.message,
@@ -922,7 +942,7 @@ export async function createTscServer(
 									text: `${failure.code}: ${failure.message}${failure.remediationHint ? `\n${failure.remediationHint}` : ''}`,
 								},
 							],
-							structuredContent: toStructured(failure),
+							structuredContent: toStructured(failureOutput),
 						}
 					}
 				},

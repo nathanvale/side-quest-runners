@@ -596,10 +596,26 @@ export async function spawnWithTimeout(
 async function ensurePathExists(validatedPath: string): Promise<void> {
 	try {
 		await stat(validatedPath)
-	} catch {
+	} catch (error) {
+		const code =
+			typeof error === 'object' && error !== null && 'code' in error
+				? String((error as { code?: unknown }).code)
+				: ''
+		if (code === 'ENOENT') {
+			throw new BiomeToolError(
+				'PATH_NOT_FOUND',
+				`Path not found: ${validatedPath}`,
+			)
+		}
+		if (code === 'EACCES' || code === 'EPERM') {
+			throw new BiomeToolError(
+				'SPAWN_FAILURE',
+				`Permission denied while accessing path: ${validatedPath}`,
+			)
+		}
 		throw new BiomeToolError(
-			'PATH_NOT_FOUND',
-			`Path not found: ${validatedPath}`,
+			'SPAWN_FAILURE',
+			`Unable to access path: ${validatedPath}`,
 		)
 	}
 }
@@ -863,7 +879,7 @@ export async function createBiomeServer(
 						const validatedPath = await validatePathOrDefault(args.path)
 						await ensurePathExists(validatedPath)
 						const summary = await runBiomeCheck(validatedPath)
-						const format = args.response_format ?? 'json'
+						const format = args.response_format
 						lintCheckLogger.info('biome_lintCheck completed', {
 							path: validatedPath,
 							errorCount: summary.errorCount,
@@ -926,7 +942,7 @@ export async function createBiomeServer(
 						const validatedPath = await validatePathOrDefault(args.path)
 						await ensurePathExists(validatedPath)
 						const result = await runBiomeFix(validatedPath)
-						const format = args.response_format ?? 'json'
+						const format = args.response_format
 						lintFixLogger.info('biome_lintFix completed', {
 							path: validatedPath,
 							fixed: result.fixed,
@@ -990,7 +1006,7 @@ export async function createBiomeServer(
 						const validatedPath = await validatePathOrDefault(args.path)
 						await ensurePathExists(validatedPath)
 						const result = await runBiomeFormatCheck(validatedPath)
-						const format = args.response_format ?? 'json'
+						const format = args.response_format
 						formatCheckLogger.info('biome_formatCheck completed', {
 							path: validatedPath,
 							formatted: result.formatted,

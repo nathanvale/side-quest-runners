@@ -8,6 +8,7 @@
  */
 
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -40,8 +41,19 @@ function assert(condition: unknown, message: string): asserts condition {
 	}
 }
 
+function assertObject(
+	value: unknown,
+	label: string,
+): asserts value is Record<string, unknown> {
+	assert(
+		typeof value === 'object' && value !== null,
+		`${label} must be an object`,
+	)
+}
+
 async function createSandboxRoot(prefix: string): Promise<string> {
-	const parent = path.join(REPO_ROOT, 'reports', 'smoke-sandboxes')
+	// Keep smoke fixtures outside the repo to avoid bun test picking up fixture files.
+	const parent = path.join(tmpdir(), 'side-quest-runners-smoke-sandboxes')
 	await mkdir(parent, { recursive: true })
 	const root = await mkdtemp(path.join(parent, `${prefix}-`))
 	return root
@@ -81,7 +93,9 @@ async function callTool(
 	let timeoutHandle: ReturnType<typeof setTimeout> | undefined
 	const timeoutPromise = new Promise<never>((_, reject) => {
 		timeoutHandle = setTimeout(() => {
-			reject(new Error(`Tool call timed out after ${TOOL_TIMEOUT_MS}ms: ${name}`))
+			reject(
+				new Error(`Tool call timed out after ${TOOL_TIMEOUT_MS}ms: ${name}`),
+			)
 		}, TOOL_TIMEOUT_MS)
 	})
 	try {
@@ -134,10 +148,12 @@ async function runTscSmoke(sandboxRoot: string): Promise<void> {
 				response_format: 'json',
 			})
 			assert(passResult.isError === false, 'tsc_check failed on passing file')
-			const passOutput = passResult.structuredContent as
-				| { errorCount?: number }
-				| undefined
-			assert(passOutput, 'tsc_check missing structuredContent')
+			const passOutput = passResult.structuredContent
+			assertObject(passOutput, 'tsc_check pass structuredContent')
+			assert(
+				typeof passOutput.errorCount === 'number',
+				'tsc_check pass output missing numeric errorCount',
+			)
 			assert(
 				passOutput.errorCount === 0,
 				`tsc_check expected 0 errors, got: ${JSON.stringify(passOutput)}`,
@@ -155,10 +171,8 @@ async function runTscSmoke(sandboxRoot: string): Promise<void> {
 				failResult.isError === false,
 				'tsc_check should return diagnostics, not tool errors',
 			)
-			const failOutput = failResult.structuredContent as
-				| { errorCount?: number; errors?: Array<{ code?: string }> }
-				| undefined
-			assert(failOutput, 'tsc_check missing structured failure output')
+			const failOutput = failResult.structuredContent
+			assertObject(failOutput, 'tsc_check fail structuredContent')
 			assert(
 				typeof failOutput.errorCount === 'number' && failOutput.errorCount > 0,
 				'tsc_check expected type errors in failing case',
@@ -204,12 +218,18 @@ async function runBunSmoke(sandboxRoot: string): Promise<void> {
 				passResult.isError === false,
 				'bun_runTests failed on passing test',
 			)
-			const passOutput = passResult.structuredContent as
-				| { failed?: number; total?: number }
-				| undefined
-			assert(passOutput, 'bun_runTests missing structuredContent')
+			const passOutput = passResult.structuredContent
+			assertObject(passOutput, 'bun_runTests structuredContent')
+			assert(
+				typeof passOutput.failed === 'number',
+				'bun_runTests missing numeric failed count',
+			)
+			assert(
+				typeof passOutput.total === 'number',
+				'bun_runTests missing numeric total count',
+			)
 			assert(passOutput.failed === 0, 'bun_runTests expected zero failures')
-			assert(typeof passOutput.total === 'number', 'bun_runTests missing total')
+			assert(passOutput.total >= 0, 'bun_runTests missing total')
 
 			const failResult = await callTool(client, 'bun_testFile', {
 				file: 'fail.test.ts',
@@ -219,13 +239,8 @@ async function runBunSmoke(sandboxRoot: string): Promise<void> {
 				failResult.isError === false,
 				'bun_testFile should return diagnostics, not tool errors',
 			)
-			const failOutput = failResult.structuredContent as
-				| {
-						failed?: number
-						failures?: Array<{ file?: string; message?: string }>
-				  }
-				| undefined
-			assert(failOutput, 'bun_testFile missing structured failure output')
+			const failOutput = failResult.structuredContent
+			assertObject(failOutput, 'bun_testFile structuredContent')
 			assert(
 				typeof failOutput.failed === 'number' && failOutput.failed > 0,
 				'bun_testFile expected at least one failed test',
@@ -242,21 +257,16 @@ async function runBunSmoke(sandboxRoot: string): Promise<void> {
 				coverageResult.isError === false,
 				'bun_testCoverage should succeed for smoke fixture',
 			)
-			const coverageOutput = coverageResult.structuredContent as
-				| {
-						coverage?: {
-							percent?: number
-							uncovered?: Array<{ file?: string; percent?: number }>
-						}
-				  }
-				| undefined
-			assert(coverageOutput, 'bun_testCoverage missing structuredContent')
+			const coverageOutput = coverageResult.structuredContent
+			assertObject(coverageOutput, 'bun_testCoverage structuredContent')
+			const coverage = coverageOutput.coverage
+			assertObject(coverage, 'bun_testCoverage coverage field')
 			assert(
-				typeof coverageOutput.coverage?.percent === 'number',
+				typeof coverage.percent === 'number',
 				'bun_testCoverage expected numeric coverage.percent',
 			)
 			assert(
-				Array.isArray(coverageOutput.coverage?.uncovered),
+				Array.isArray(coverage.uncovered),
 				'bun_testCoverage expected uncovered array',
 			)
 		},
@@ -288,10 +298,12 @@ async function runBiomeSmoke(sandboxRoot: string): Promise<void> {
 				response_format: 'json',
 			})
 			assert(before.isError === false, 'biome_formatCheck failed before fix')
-			const beforeOutput = before.structuredContent as
-				| { formatted?: boolean; unformattedFiles?: string[] }
-				| undefined
-			assert(beforeOutput, 'biome_formatCheck missing structuredContent')
+			const beforeOutput = before.structuredContent
+			assertObject(beforeOutput, 'biome_formatCheck pre-fix structuredContent')
+			assert(
+				typeof beforeOutput.formatted === 'boolean',
+				'biome_formatCheck pre-fix missing boolean formatted field',
+			)
 			assert(
 				beforeOutput.formatted === false,
 				'expected unformatted fixture file',
@@ -302,19 +314,16 @@ async function runBiomeSmoke(sandboxRoot: string): Promise<void> {
 				response_format: 'json',
 			})
 			assert(fixResult.isError === false, 'biome_lintFix failed')
-			const fixOutput = fixResult.structuredContent as
-				| {
-						fixed?: number
-						remaining?: { errorCount?: number; warningCount?: number }
-				  }
-				| undefined
-			assert(fixOutput, 'biome_lintFix missing structuredContent')
+			const fixOutput = fixResult.structuredContent
+			assertObject(fixOutput, 'biome_lintFix structuredContent')
+			const remaining = fixOutput.remaining
+			assertObject(remaining, 'biome_lintFix remaining field')
 			assert(
 				typeof fixOutput.fixed === 'number',
 				'biome_lintFix missing fixed count',
 			)
 			assert(
-				typeof fixOutput.remaining?.errorCount === 'number',
+				typeof remaining.errorCount === 'number',
 				'biome_lintFix missing remaining.errorCount',
 			)
 
@@ -323,16 +332,11 @@ async function runBiomeSmoke(sandboxRoot: string): Promise<void> {
 				response_format: 'json',
 			})
 			assert(after.isError === false, 'biome_formatCheck failed after fix')
-			const afterOutput = after.structuredContent as
-				| { formatted?: boolean; unformattedFiles?: string[] }
-				| undefined
+			const afterOutput = after.structuredContent
+			assertObject(afterOutput, 'biome_formatCheck post-fix structuredContent')
 			assert(
-				afterOutput,
-				'biome_formatCheck missing post-fix structuredContent',
-			)
-			assert(
-				typeof afterOutput.formatted === 'boolean',
-				'biome_formatCheck missing boolean formatted field after fix',
+				afterOutput.formatted === true,
+				'biome_lintFix did not produce a formatted workspace',
 			)
 		},
 	})
@@ -389,7 +393,10 @@ async function run(): Promise<void> {
 				console.error(
 					`[smoke] ${runnerCase.name} failed (${elapsedMs}ms): ${message}`,
 				)
-				throw error
+				const runnerError = new Error(`[${runnerCase.name}] ${message}`, {
+					cause: error,
+				})
+				throw runnerError
 			}
 		}
 		const totalMs = Date.now() - startedAt
@@ -410,7 +417,13 @@ async function run(): Promise<void> {
 				...rows,
 				'',
 			].join('\n')
-			await appendFile(summaryPath, summary)
+			try {
+				await appendFile(summaryPath, summary)
+			} catch (error) {
+				console.error(
+					`Failed to append smoke summary: ${error instanceof Error ? error.message : String(error)}`,
+				)
+			}
 		}
 
 		if (keepSandboxes) {

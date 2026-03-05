@@ -360,10 +360,7 @@ describe('createBunInvocation', () => {
 
 describe('spawnWithTimeout', () => {
 	test('returns timedOut=true for long-running subprocesses', async () => {
-		const result = await spawnWithTimeout(
-			['bun', '-e', 'setInterval(() => {}, 1000)'],
-			50,
-		)
+		const result = await spawnWithTimeout(['bun', '-e', 'setInterval(() => {}, 1000)'], 50)
 
 		expect(result.timedOut).toBe(true)
 		expect(typeof result.stdout).toBe('string')
