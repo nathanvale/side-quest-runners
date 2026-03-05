@@ -48,6 +48,9 @@ CLAUDE.local.md
 test-results/
 .vitest/
 reports/smoke-sandboxes/
+reports/ab/archive/
+reports/ab/current-run.json
+reports/ab/thresholds.json
 
 #Obsidian vault
 .vault/
