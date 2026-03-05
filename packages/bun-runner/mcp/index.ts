@@ -521,7 +521,12 @@ function createToolFailure(failure: ToolFailure): CallToolResult {
 	}
 }
 
-async function spawnWithTimeout(
+/**
+ * Spawn a subprocess and enforce timeout with SIGTERM -> SIGKILL escalation.
+ *
+ * Why: bun-runner tools must avoid hanging CI and local checks on stalled subprocesses.
+ */
+export async function spawnWithTimeout(
 	cmd: string[],
 	timeoutMs: number,
 	options?: {

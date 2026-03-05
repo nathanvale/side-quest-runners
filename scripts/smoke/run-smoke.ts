@@ -32,6 +32,7 @@ interface ToolResult {
 }
 
 const REPO_ROOT = path.resolve(import.meta.dir, '..', '..')
+const TOOL_TIMEOUT_MS = 15_000
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) {
@@ -73,11 +74,24 @@ async function callTool(
 	name: string,
 	parameters: Record<string, unknown>,
 ): Promise<ToolResult> {
-	const result = await client.callTool({
+	const resultPromise = client.callTool({
 		name,
 		arguments: parameters,
 	})
-	return result as ToolResult
+	let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		timeoutHandle = setTimeout(() => {
+			reject(new Error(`Tool call timed out after ${TOOL_TIMEOUT_MS}ms: ${name}`))
+		}, TOOL_TIMEOUT_MS)
+	})
+	try {
+		const result = await Promise.race([resultPromise, timeoutPromise])
+		return result as ToolResult
+	} finally {
+		if (timeoutHandle) {
+			clearTimeout(timeoutHandle)
+		}
+	}
 }
 
 async function runTscSmoke(sandboxRoot: string): Promise<void> {
@@ -402,7 +416,13 @@ async function run(): Promise<void> {
 		if (keepSandboxes) {
 			console.log(`Keeping sandbox for debugging: ${sandboxRoot}`)
 		} else {
-			await rm(sandboxRoot, { recursive: true, force: true })
+			try {
+				await rm(sandboxRoot, { recursive: true, force: true })
+			} catch (error) {
+				console.error(
+					`Failed to cleanup smoke sandbox (${sandboxRoot}): ${error instanceof Error ? error.message : String(error)}`,
+				)
+			}
 		}
 	}
 }

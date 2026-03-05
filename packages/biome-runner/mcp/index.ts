@@ -535,7 +535,12 @@ function createToolFailure(failure: ToolFailure): CallToolResult {
 	}
 }
 
-async function spawnWithTimeout(
+/**
+ * Spawn a subprocess and enforce timeout with SIGTERM -> SIGKILL escalation.
+ *
+ * Why: biome-runner tools must remain responsive even when underlying commands hang.
+ */
+export async function spawnWithTimeout(
 	cmd: string[],
 	options?: {
 		cwd?: string

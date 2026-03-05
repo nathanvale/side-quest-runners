@@ -8,6 +8,7 @@ import {
 	createBunInvocation,
 	createBunServer,
 	SERVER_VERSION,
+	spawnWithTimeout,
 	validatePath,
 	validateShellSafePattern,
 } from './index'
@@ -354,6 +355,19 @@ describe('createBunInvocation', () => {
 	test('builds coverage command with Bun coverage flag', () => {
 		const invocation = createBunCoverageInvocation()
 		expect(invocation.cmd).toEqual(['bun', 'test', '--coverage'])
+	})
+})
+
+describe('spawnWithTimeout', () => {
+	test('returns timedOut=true for long-running subprocesses', async () => {
+		const result = await spawnWithTimeout(
+			['bun', '-e', 'setInterval(() => {}, 1000)'],
+			50,
+		)
+
+		expect(result.timedOut).toBe(true)
+		expect(typeof result.stdout).toBe('string')
+		expect(typeof result.stderr).toBe('string')
 	})
 })
 
