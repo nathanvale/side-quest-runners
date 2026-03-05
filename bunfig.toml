@@ -1,0 +1,4 @@
+[test]
+# Smoke harness creates temporary fixtures here; exclude to avoid root `bun test`
+# picking them up as real test files.
+testPathIgnorePatterns = ["/\\.smoke-sandboxes\\//"]
