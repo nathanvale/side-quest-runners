@@ -8,7 +8,6 @@
  */
 
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -52,8 +51,9 @@ function assertObject(
 }
 
 async function createSandboxRoot(prefix: string): Promise<string> {
-	// Keep smoke fixtures outside the repo to avoid bun test picking up fixture files.
-	const parent = path.join(tmpdir(), 'side-quest-runners-smoke-sandboxes')
+	// Keep smoke fixtures inside repo path boundaries required by runner validators.
+	// Bun test ignores this directory via bunfig.toml testPathIgnorePatterns.
+	const parent = path.join(REPO_ROOT, '.smoke-sandboxes')
 	await mkdir(parent, { recursive: true })
 	const root = await mkdtemp(path.join(parent, `${prefix}-`))
 	return root
@@ -337,6 +337,11 @@ async function runBiomeSmoke(sandboxRoot: string): Promise<void> {
 			assert(
 				afterOutput.formatted === true,
 				'biome_lintFix did not produce a formatted workspace',
+			)
+			assert(
+				Array.isArray(afterOutput.unformattedFiles) &&
+					afterOutput.unformattedFiles.length === 0,
+				'biome_formatCheck still reports unformatted files after biome_lintFix',
 			)
 		},
 	})

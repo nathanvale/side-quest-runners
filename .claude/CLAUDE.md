@@ -41,7 +41,7 @@ bun run release          # Publish with provenance
 
 Bun workspace monorepo with 3 independent packages under `packages/`:
 
-```
+```text
 packages/
   biome-runner/    @side-quest/biome-runner  - Biome lint + format diagnostics
   bun-runner/      @side-quest/bun-runner    - Bun test runner
@@ -58,9 +58,9 @@ Every server follows the same structure:
 2. **Stdio entry** -- `startXServer()` connects via `StdioServerTransport`
 3. **Entry guard** -- `if (import.meta.main) { void startXServer() }`
 
-```
+```text
 mcp/index.ts        # Server implementation (~1000 lines)
-mcp/index.test.ts   # Colocated tests
+mcp/index.test.ts   # Co-located tests
 ```
 
 ---
@@ -69,7 +69,7 @@ mcp/index.test.ts   # Colocated tests
 
 Uses **Bun's built-in test runner** (`bun:test`), NOT Vitest.
 
-Tests are colocated at `mcp/index.test.ts` with three tiers:
+Tests are co-located at `mcp/index.test.ts` with three tiers:
 
 1. **Unit tests** -- pure functions (parsers, formatters, validators)
 2. **Integration tests** -- full MCP round-trips via `InMemoryTransport` (calls `createXServer()`)
@@ -106,7 +106,7 @@ Smoke tests live at `scripts/smoke/run-smoke.ts` and run via `bun test:smoke`.
 
 **Commit format:** Conventional Commits (enforced by commitlint)
 
-```
+```text
 feat(scope): add new feature
 fix(scope): fix bug
 chore(deps): update dependencies
