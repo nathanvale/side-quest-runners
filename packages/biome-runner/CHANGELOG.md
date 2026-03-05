@@ -1,5 +1,21 @@
 # @side-quest/biome-runner
 
+## 1.0.3
+
+### Patch Changes
+
+- [#40](https://github.com/nathanvale/side-quest-runners/pull/40) [`e88bb1d`](https://github.com/nathanvale/side-quest-runners/commit/e88bb1d95a39f3b03cacddfa42f733abcad1fc87) Thanks [@nathanvale](https://github.com/nathanvale)! - feat(runners): publish unpublished phase A-E runner improvements
+
+  This release captures the runner changes since the last package publish:
+
+  - phase A: migrate runners to `@modelcontextprotocol/sdk@1.27.1`
+  - phase B/C/D: improve tsc-runner contract, reliability, and observability behavior
+  - phase E: complete cross-runner parity updates and follow-up fixes
+  - smoke hardening: add cross-runner stdio sandbox checks and CI/validate integration
+
+  This release focuses on runner reliability and end-to-end validation confidence
+  across all three MCP runners.
+
 ## 1.0.2
 
 ### Patch Changes
