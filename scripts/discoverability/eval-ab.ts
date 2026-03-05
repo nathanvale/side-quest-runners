@@ -629,6 +629,13 @@ async function main(): Promise<void> {
 		{ name: 'after-uplift', tools: TOOLS_AFTER_UPLIFT },
 	]
 
+	const plannedEvaluations = variants.length * prompts.length * repeats
+	if (plannedEvaluations > MAX_EVALUATIONS) {
+		throw new Error(
+			`Requested config needs ${plannedEvaluations} evaluations, exceeds MAX_EVALUATIONS=${MAX_EVALUATIONS}. Lower --repeats or use --suite=minimal.`,
+		)
+	}
+
 	if (suite === 'minimal' && requestedRepeats !== MINIMAL_SEEDS.length) {
 		console.warn(
 			`[eval-ab] minimal suite forces repeats=${MINIMAL_SEEDS.length}; ignoring --repeats=${requestedRepeats}.`,
