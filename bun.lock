@@ -10,6 +10,7 @@
         "@changesets/cli": "^2.29.7",
         "@commitlint/cli": "^20.1.0",
         "@commitlint/config-conventional": "^20.0.0",
+        "@modelcontextprotocol/sdk": "1.27.1",
         "@types/node": "^24.8.1",
         "bun-types": "^1.3.3",
         "bunup": "^0.16.10",
@@ -26,6 +27,7 @@
         "biome-runner": "./dist/index.js",
       },
       "dependencies": {
+        "@logtape/logtape": "^2.0.4",
         "@modelcontextprotocol/sdk": "^1.27.1",
         "zod": "^3.25",
       },
@@ -37,6 +39,7 @@
         "bun-runner": "./dist/index.js",
       },
       "dependencies": {
+        "@logtape/logtape": "^2.0.4",
         "@modelcontextprotocol/sdk": "^1.27.1",
         "zod": "^3.25",
       },

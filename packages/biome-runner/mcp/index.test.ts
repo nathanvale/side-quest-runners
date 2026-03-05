@@ -1,12 +1,16 @@
 import { describe, expect, test } from 'bun:test'
-import { rm, symlink } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import {
 	_resetGitRootCache,
+	createBiomeInvocation,
 	createBiomeServer,
 	parseBiomeOutput,
+	SERVER_VERSION,
+	spawnWithTimeout,
 	validatePath,
 	validatePathOrDefault,
 } from './index'
@@ -79,9 +83,82 @@ describe('path validation', () => {
 	})
 })
 
+describe('createBiomeInvocation', () => {
+	test('applies strict env allowlist plus CI', () => {
+		const previousNodePath = process.env.NODE_PATH
+		const previousBunInstall = process.env.BUN_INSTALL
+		const previousTmpdir = process.env.TMPDIR
+		try {
+			process.env.NODE_PATH = '/tmp/node-path'
+			process.env.BUN_INSTALL = '/tmp/bun-install'
+			process.env.TMPDIR = '/tmp'
+
+			const invocation = createBiomeInvocation({
+				subcommand: 'check',
+				path: 'packages/biome-runner',
+				write: true,
+			})
+			const keys = Object.keys(invocation.env)
+
+			expect(keys.includes('CI')).toBe(true)
+			expect(keys.includes('PATH')).toBe(true)
+			expect(keys.includes('HOME')).toBe(true)
+			expect(keys.includes('NODE_PATH')).toBe(true)
+			expect(keys.includes('BUN_INSTALL')).toBe(true)
+			expect(keys.includes('TMPDIR')).toBe(true)
+			expect(keys.includes('AWS_SECRET_ACCESS_KEY')).toBe(false)
+			expect(keys.includes('GITHUB_TOKEN')).toBe(false)
+			expect(invocation.cmd).toEqual([
+				'bunx',
+				'@biomejs/biome',
+				'check',
+				'--write',
+				'--reporter=json',
+				'packages/biome-runner',
+			])
+		} finally {
+			if (previousNodePath === undefined) {
+				delete process.env.NODE_PATH
+			} else {
+				process.env.NODE_PATH = previousNodePath
+			}
+			if (previousBunInstall === undefined) {
+				delete process.env.BUN_INSTALL
+			} else {
+				process.env.BUN_INSTALL = previousBunInstall
+			}
+			if (previousTmpdir === undefined) {
+				delete process.env.TMPDIR
+			} else {
+				process.env.TMPDIR = previousTmpdir
+			}
+		}
+	})
+})
+
+describe('spawnWithTimeout', () => {
+	test('returns timedOut=true for long-running subprocesses', async () => {
+		const result = await spawnWithTimeout(['bun', '-e', 'setInterval(() => {}, 1000)'], {
+			timeoutMs: 50,
+		})
+
+		expect(result.timedOut).toBe(true)
+		expect(typeof result.stdout).toBe('string')
+		expect(typeof result.stderr).toBe('string')
+	})
+})
+
 describe('biome tools integration', () => {
+	test('syncs MCP server version with package.json', () => {
+		const packageJson = JSON.parse(
+			readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+		) as { version: string }
+
+		expect(SERVER_VERSION).toBe(packageJson.version)
+	})
+
 	test('exposes all three tools via tools/list', async () => {
-		const server = createBiomeServer()
+		const server = await createBiomeServer()
 		const client = new Client({ name: 'biome-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -98,7 +175,7 @@ describe('biome tools integration', () => {
 
 			const lintFix = list.tools.find((entry) => entry.name === 'biome_lintFix')
 			expect(lintFix).toBeDefined()
-			expect(lintFix?.title).toBe('Biome Lint Fixer')
+			expect(lintFix?.title).toBe('Biome Lint & Format Fixer')
 			expect(lintFix?.annotations?.destructiveHint).toBe(true)
 			expect(lintFix?.outputSchema).toBeDefined()
 
@@ -114,7 +191,7 @@ describe('biome tools integration', () => {
 
 	test('lintCheck returns structuredContent', async () => {
 		_resetGitRootCache()
-		const server = createBiomeServer()
+		const server = await createBiomeServer()
 		const client = new Client({ name: 'biome-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -124,7 +201,7 @@ describe('biome tools integration', () => {
 			const result = await client.callTool({
 				name: 'biome_lintCheck',
 				arguments: {
-					path: 'packages/biome-runner',
+					path: '.',
 					response_format: 'json',
 				},
 			})
@@ -148,7 +225,7 @@ describe('biome tools integration', () => {
 
 	test('format check returns structuredContent', async () => {
 		_resetGitRootCache()
-		const server = createBiomeServer()
+		const server = await createBiomeServer()
 		const client = new Client({ name: 'biome-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -158,7 +235,7 @@ describe('biome tools integration', () => {
 			const result = await client.callTool({
 				name: 'biome_formatCheck',
 				arguments: {
-					path: 'packages/biome-runner',
+					path: '.',
 					response_format: 'json',
 				},
 			})
@@ -175,6 +252,46 @@ describe('biome tools integration', () => {
 			expect(Array.isArray(output.unformattedFiles)).toBe(true)
 		} finally {
 			await Promise.all([client.close(), server.close()])
+		}
+	})
+
+	test('lintFix returns structuredContent with fixed/remaining fields', async () => {
+		_resetGitRootCache()
+		const fixtureParent = path.join(process.cwd(), 'reports')
+		await mkdir(fixtureParent, { recursive: true })
+		const fixtureDir = await mkdtemp(path.join(fixtureParent, 'biome-lintfix-fixture-'))
+		const fixtureFile = path.join(fixtureDir, 'bad.js')
+		await writeFile(fixtureFile, 'const foo={bar:1}\n')
+		const server = await createBiomeServer()
+		const client = new Client({ name: 'biome-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'biome_lintFix',
+				arguments: {
+					path: fixtureDir,
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(false)
+			expect(result.structuredContent).toBeDefined()
+
+			const output = result.structuredContent as {
+				fixed: number
+				remaining: { errorCount: number; warningCount: number; diagnostics: unknown[] }
+			}
+
+			expect(typeof output.fixed).toBe('number')
+			expect(typeof output.remaining.errorCount).toBe('number')
+			expect(typeof output.remaining.warningCount).toBe('number')
+			expect(Array.isArray(output.remaining.diagnostics)).toBe(true)
+		} finally {
+			await Promise.all([client.close(), server.close()])
+			await rm(fixtureDir, { recursive: true, force: true })
 		}
 	})
 })

@@ -19,6 +19,7 @@ type PromptCase = {
 	prompt: string
 	expected: string
 	confusionPair: string
+	canary?: boolean
 }
 
 type RouterPick = {
@@ -27,6 +28,13 @@ type RouterPick = {
 }
 
 type VariantName = 'before-uplift' | 'after-uplift'
+type SuiteId = 'core' | 'stress' | 'minimal'
+
+const MAX_EVALUATIONS = 100
+const MAX_TOKENS = 100_000
+const CALL_TIMEOUT_MS = 10_000
+const RETRY_BACKOFF_MS = 2_000
+const MINIMAL_SEEDS = [1101, 2202, 3303] as const
 
 const TOOLS_BEFORE_UPLIFT: ToolDef[] = [
 	{
@@ -257,6 +265,84 @@ const PROMPTS_STRESS: PromptCase[] = [
 	},
 ]
 
+const PROMPTS_MINIMAL: PromptCase[] = [
+	{
+		id: 'M01',
+		prompt: 'Run read-only lint checks for this package.',
+		expected: 'biome_lintCheck',
+		confusionPair: 'biome_lintCheck vs biome_lintFix',
+	},
+	{
+		id: 'M02',
+		prompt: 'Fix lint and formatting issues automatically.',
+		expected: 'biome_lintFix',
+		confusionPair: 'biome_lintFix vs biome_lintCheck',
+	},
+	{
+		id: 'M03',
+		prompt: 'Check formatting only without modifying files.',
+		expected: 'biome_formatCheck',
+		confusionPair: 'biome_formatCheck vs biome_lintFix',
+	},
+	{
+		id: 'M04',
+		prompt: 'Run the full test suite quickly, no coverage needed.',
+		expected: 'bun_runTests',
+		confusionPair: 'bun_runTests vs bun_testCoverage',
+	},
+	{
+		id: 'M05',
+		prompt: 'Run tests only for packages/tsc-runner/mcp/index.test.ts.',
+		expected: 'bun_testFile',
+		confusionPair: 'bun_testFile vs bun_runTests',
+	},
+	{
+		id: 'M06',
+		prompt: 'Run coverage before release notes are generated.',
+		expected: 'bun_testCoverage',
+		confusionPair: 'bun_testCoverage vs bun_runTests',
+	},
+	{
+		id: 'M07',
+		prompt: 'Type-check only; do not run lint or tests.',
+		expected: 'tsc_check',
+		confusionPair: 'tsc_check vs biome_lintCheck',
+	},
+	{
+		id: 'C01',
+		prompt: 'Which tool reports unformatted files in read-only mode?',
+		expected: 'biome_formatCheck',
+		confusionPair: 'biome_formatCheck vs biome_lintCheck',
+		canary: true,
+	},
+	{
+		id: 'C02',
+		prompt: 'I need one test file rerun, not the full suite.',
+		expected: 'bun_testFile',
+		confusionPair: 'bun_testFile vs bun_runTests',
+		canary: true,
+	},
+	{
+		id: 'C03',
+		prompt: 'Auto-fix style issues and write changes.',
+		expected: 'biome_lintFix',
+		confusionPair: 'biome_lintFix vs biome_formatCheck',
+		canary: true,
+	},
+]
+
+const PROMPT_SUITES: Record<SuiteId, readonly PromptCase[]> = {
+	core: PROMPTS_CORE,
+	stress: PROMPTS_STRESS,
+	minimal: PROMPTS_MINIMAL,
+}
+
+const SUITE_VERSION: Record<SuiteId, string> = {
+	core: 'core-v1',
+	stress: 'stress-v1',
+	minimal: 'minimal-v1',
+}
+
 function parseArg(name: string, fallback: string): string {
 	const exact = Bun.argv.find((arg) => arg.startsWith(`${name}=`))
 	if (!exact) {
@@ -277,7 +363,15 @@ function parseFloatArg(name: string, fallback: number): number {
 	return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function normalizeToolName(raw: string, allowed: string[]): string | null {
+function parseBoolArg(name: string): boolean {
+	const value = parseArg(name, '')
+	return value === '1' || value === 'true' || value === 'yes'
+}
+
+function normalizeToolName(
+	raw: string,
+	allowed: readonly string[],
+): string | null {
 	const cleaned = raw.trim().replace(/^`|`$/g, '')
 	if (allowed.includes(cleaned)) {
 		return cleaned
@@ -285,7 +379,7 @@ function normalizeToolName(raw: string, allowed: string[]): string | null {
 	return null
 }
 
-function fallbackSecond(first: string, allowed: string[]): string {
+function fallbackSecond(first: string, allowed: readonly string[]): string {
 	const candidate = allowed.find((name) => name !== first)
 	if (!candidate) {
 		throw new Error('No alternate tool available for second choice fallback.')
@@ -293,74 +387,121 @@ function fallbackSecond(first: string, allowed: string[]): string {
 	return candidate
 }
 
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+type OpenAIUsage = {
+	total_tokens?: number
+}
+
+type OpenAIResponse = {
+	model?: string
+	usage?: OpenAIUsage
+	choices?: Array<{ message?: { content?: string } }>
+}
+
 async function pickWithOpenAI(
 	model: string,
 	apiKey: string,
-	tools: ToolDef[],
+	tools: readonly ToolDef[],
 	promptCase: PromptCase,
 	temperature: number,
-): Promise<RouterPick> {
+	seed: number,
+): Promise<{ pick: RouterPick; usageTokens: number; responseModel: string }> {
 	const allowedToolNames = tools.map((t) => t.name)
 	const toolList = tools
 		.map((tool) => `- ${tool.name}: ${tool.description}`)
 		.join('\n')
 
-	const response = await fetch('https://api.openai.com/v1/chat/completions', {
-		method: 'POST',
-		headers: {
-			Authorization: `Bearer ${apiKey}`,
-			'Content-Type': 'application/json',
-		},
-		body: JSON.stringify({
-			model,
-			temperature,
-			messages: [
+	let lastError: Error | null = null
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		const controller = new AbortController()
+		const timeoutId = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS)
+		try {
+			const response = await fetch(
+				'https://api.openai.com/v1/chat/completions',
 				{
-					role: 'system',
-					content:
-						'You are a tool router. Choose tools only from the provided list. Respond with strict JSON object: {"first":"tool_name","second":"tool_name"}. second must differ from first.',
+					method: 'POST',
+					headers: {
+						Authorization: `Bearer ${apiKey}`,
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({
+						model,
+						temperature,
+						seed,
+						messages: [
+							{
+								role: 'system',
+								content:
+									'You are a tool router. Choose tools only from the provided list. Respond with strict JSON object: {"first":"tool_name","second":"tool_name"}. second must differ from first.',
+							},
+							{
+								role: 'user',
+								content: `Task request:\n${promptCase.prompt}\n\nAvailable tools:\n${toolList}\n\nReturn only JSON.`,
+							},
+						],
+						response_format: {
+							type: 'json_object',
+						},
+					}),
+					signal: controller.signal,
 				},
-				{
-					role: 'user',
-					content: `Task request:\n${promptCase.prompt}\n\nAvailable tools:\n${toolList}\n\nReturn only JSON.`,
-				},
-			],
-			response_format: {
-				type: 'json_object',
-			},
-		}),
-	})
+			)
 
-	if (!response.ok) {
-		const text = await response.text()
-		throw new Error(`OpenAI request failed (${response.status}): ${text}`)
+			if (!response.ok) {
+				const text = await response.text()
+				if (response.status >= 500 && attempt === 0) {
+					await delay(RETRY_BACKOFF_MS)
+					continue
+				}
+				throw new Error(`OpenAI request failed (${response.status}): ${text}`)
+			}
+
+			const json = (await response.json()) as OpenAIResponse
+			const raw = json.choices?.[0]?.message?.content ?? '{}'
+			let parsed: RouterPick | null = null
+			try {
+				parsed = JSON.parse(raw) as RouterPick
+			} catch {
+				throw new Error(`Router returned invalid JSON: ${raw}`)
+			}
+
+			const first = normalizeToolName(parsed.first, allowedToolNames)
+			const second = normalizeToolName(parsed.second, allowedToolNames)
+
+			if (!first) {
+				throw new Error(
+					`Router returned invalid tool names: first=${parsed.first}, second=${parsed.second}`,
+				)
+			}
+
+			const usageTokens = Number.isFinite(json.usage?.total_tokens)
+				? Number(json.usage?.total_tokens)
+				: 0
+
+			const pick: RouterPick =
+				!second || first === second
+					? { first, second: fallbackSecond(first, allowedToolNames) }
+					: { first, second }
+
+			return {
+				pick,
+				usageTokens,
+				responseModel: json.model ?? model,
+			}
+		} catch (error) {
+			lastError = error instanceof Error ? error : new Error(String(error))
+			if (attempt === 0) {
+				await delay(RETRY_BACKOFF_MS)
+			}
+		} finally {
+			clearTimeout(timeoutId)
+		}
 	}
 
-	const json = (await response.json()) as {
-		choices?: Array<{ message?: { content?: string } }>
-	}
-	const raw = json.choices?.[0]?.message?.content ?? '{}'
-	let parsed: RouterPick | null = null
-	try {
-		parsed = JSON.parse(raw) as RouterPick
-	} catch {
-		throw new Error(`Router returned invalid JSON: ${raw}`)
-	}
-
-	const first = normalizeToolName(parsed.first, allowedToolNames)
-	const second = normalizeToolName(parsed.second, allowedToolNames)
-
-	if (!first) {
-		throw new Error(
-			`Router returned invalid tool names: first=${parsed.first}, second=${parsed.second}`,
-		)
-	}
-
-	if (!second || first === second) {
-		return { first, second: fallbackSecond(first, allowedToolNames) }
-	}
-
-	return { first, second }
+	throw lastError ?? new Error('OpenAI request failed after retries.')
 }
 
 function computeMetrics(
@@ -432,26 +573,74 @@ function computeMetrics(
 	return { byVariant, delta }
 }
 
+function parseSuite(raw: string): SuiteId {
+	if (raw === 'core' || raw === 'stress' || raw === 'minimal') {
+		return raw
+	}
+	return 'core'
+}
+
+function pickDryRun(
+	tools: readonly ToolDef[],
+	promptCase: PromptCase,
+): { pick: RouterPick; usageTokens: number; responseModel: string } {
+	const allowed = tools.map((tool) => tool.name)
+	const first =
+		normalizeToolName(promptCase.expected, allowed) ?? allowed[0] ?? ''
+	if (!first) {
+		throw new Error('No tools available for dry-run pick.')
+	}
+	return {
+		pick: { first, second: fallbackSecond(first, allowed) },
+		usageTokens: 0,
+		responseModel: 'dry-run',
+	}
+}
+
 async function main(): Promise<void> {
+	const dryRun = parseBoolArg('--dry-run')
+	const suite = parseSuite(parseArg('--suite', 'core'))
+	const prompts = PROMPT_SUITES[suite]
+	const suiteVersion = SUITE_VERSION[suite]
+
 	const apiKey = process.env.OPENAI_API_KEY
-	if (!apiKey) {
-		throw new Error('OPENAI_API_KEY is required for llm routing eval.')
+	if (!apiKey && !dryRun) {
+		throw new Error(
+			'OPENAI_API_KEY is required for live routing eval. Use --dry-run=true for local simulation.',
+		)
 	}
 
-	const model = parseArg('--model', process.env.OPENAI_MODEL || 'gpt-4.1-mini')
-	const repeats = parseIntArg('--repeats', 3)
+	const model = parseArg(
+		'--model',
+		process.env.OPENAI_MODEL || 'gpt-4.1-mini-2025-04-14',
+	)
 	const temperature = parseFloatArg('--temperature', 0.2)
-	const suiteArg = parseArg('--suite', 'core')
-	const prompts = suiteArg === 'stress' ? PROMPTS_STRESS : PROMPTS_CORE
+	const seedBase = parseIntArg('--seedBase', 42_000)
+	const defaultRepeats = suite === 'stress' ? 2 : 3
+	const requestedRepeats = parseIntArg('--repeats', defaultRepeats)
+	const repeats = suite === 'minimal' ? MINIMAL_SEEDS.length : requestedRepeats
 	const outPath = parseArg(
 		'--out',
 		`reports/discoverability-ab-${new Date().toISOString().replaceAll(':', '-')}.json`,
 	)
 
-	const variants: Array<{ name: VariantName; tools: ToolDef[] }> = [
+	const variants: Array<{ name: VariantName; tools: readonly ToolDef[] }> = [
 		{ name: 'before-uplift', tools: TOOLS_BEFORE_UPLIFT },
 		{ name: 'after-uplift', tools: TOOLS_AFTER_UPLIFT },
 	]
+
+	const plannedEvaluations = variants.length * prompts.length * repeats
+	if (plannedEvaluations > MAX_EVALUATIONS) {
+		throw new Error(
+			`Requested config needs ${plannedEvaluations} evaluations, exceeds MAX_EVALUATIONS=${MAX_EVALUATIONS}. Lower --repeats or use --suite=minimal.`,
+		)
+	}
+
+	if (suite === 'minimal' && requestedRepeats !== MINIMAL_SEEDS.length) {
+		console.warn(
+			`[eval-ab] minimal suite forces repeats=${MINIMAL_SEEDS.length}; ignoring --repeats=${requestedRepeats}.`,
+		)
+	}
 
 	const rows: Array<{
 		variant: VariantName
@@ -459,28 +648,61 @@ async function main(): Promise<void> {
 		prompt: string
 		expected: string
 		confusionPair: string
+		seed: number
+		canary: boolean
 		first: string
 		second: string
 	}> = []
 
+	let evaluationCount = 0
+	let totalTokens = 0
+	let resolvedModel = model
+
 	for (const variant of variants) {
 		for (const promptCase of prompts) {
 			for (let i = 0; i < repeats; i += 1) {
-				const pick = await pickWithOpenAI(
-					model,
-					apiKey,
-					variant.tools,
-					promptCase,
-					temperature,
-				)
+				if (evaluationCount >= MAX_EVALUATIONS) {
+					throw new Error(
+						`MAX_EVALUATIONS reached (${MAX_EVALUATIONS}); aborting to prevent runaway API calls.`,
+					)
+				}
+
+				const seed =
+					suite === 'minimal'
+						? (MINIMAL_SEEDS[i] ?? MINIMAL_SEEDS[0])
+						: seedBase + i
+
+				const result = dryRun
+					? pickDryRun(variant.tools, promptCase)
+					: await pickWithOpenAI(
+							model,
+							apiKey as string,
+							variant.tools,
+							promptCase,
+							temperature,
+							seed,
+						)
+
+				evaluationCount += 1
+				totalTokens += result.usageTokens
+				resolvedModel = result.responseModel
+
+				if (totalTokens > MAX_TOKENS) {
+					throw new Error(
+						`MAX_TOKENS exceeded (${MAX_TOKENS}); aborting after ${evaluationCount} evaluations.`,
+					)
+				}
+
 				rows.push({
 					variant: variant.name,
 					promptId: promptCase.id,
 					prompt: promptCase.prompt,
 					expected: promptCase.expected,
 					confusionPair: promptCase.confusionPair,
-					first: pick.first,
-					second: pick.second,
+					seed,
+					canary: Boolean(promptCase.canary),
+					first: result.pick.first,
+					second: result.pick.second,
 				})
 			}
 		}
@@ -488,12 +710,26 @@ async function main(): Promise<void> {
 
 	const metrics = computeMetrics(rows)
 	const output = {
+		version: 1 as const,
 		createdAt: new Date().toISOString(),
-		model,
+		suite,
+		suiteVersion,
+		promptCount: prompts.length,
+		canaryPromptCount: prompts.filter((prompt) => prompt.canary).length,
+		model: resolvedModel,
 		repeats,
 		temperature,
-		suite: suiteArg,
-		promptCount: prompts.length,
+		dryRun,
+		guardrails: {
+			maxEvaluations: MAX_EVALUATIONS,
+			maxTokens: MAX_TOKENS,
+			timeoutMs: CALL_TIMEOUT_MS,
+			retries: 1,
+		},
+		usage: {
+			evaluationCount,
+			totalTokens,
+		},
 		variants: {
 			beforeUplift: TOOLS_BEFORE_UPLIFT.map((t) => ({
 				name: t.name,
@@ -512,10 +748,13 @@ async function main(): Promise<void> {
 
 	const summary = {
 		outPath,
-		model,
+		suite,
+		suiteVersion,
+		model: resolvedModel,
 		repeats,
-		suite: suiteArg,
 		promptCount: prompts.length,
+		dryRun,
+		usage: output.usage,
 		beforeUplift: metrics.byVariant['before-uplift'],
 		afterUplift: metrics.byVariant['after-uplift'],
 		delta: metrics.delta,

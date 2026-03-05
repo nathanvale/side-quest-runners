@@ -8,11 +8,29 @@
  * Provides tools to run Bun tests with structured, token-efficient output.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { readFileSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import path from 'node:path'
+import {
+	configure,
+	dispose,
+	fingersCrossed,
+	getLogger,
+	getStreamSink,
+	jsonLinesFormatter,
+	type LogLevel,
+	type LogRecord,
+	type Sink,
+	withContext,
+} from '@logtape/logtape'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import type {
+	CallToolResult,
+	LoggingLevel,
+} from '@modelcontextprotocol/sdk/types.js'
+import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import {
 	parseBunTestOutput,
@@ -33,6 +51,69 @@ function toStructured(value: object): Record<string, unknown> {
 
 const TEST_TIMEOUT_MS = 30_000
 const COVERAGE_TIMEOUT_MS = 60_000
+const configuredCoverageLowThreshold = Number.parseFloat(
+	process.env.BUN_COVERAGE_LOW_THRESHOLD ?? '50',
+)
+const COVERAGE_LOW_THRESHOLD = Number.isFinite(configuredCoverageLowThreshold)
+	? configuredCoverageLowThreshold
+	: 50
+const BUN_ENV_ALLOWLIST = [
+	'PATH',
+	'HOME',
+	'NODE_PATH',
+	'BUN_INSTALL',
+	'TMPDIR',
+] as const
+const TOOL_ERROR_CODES = [
+	'TIMEOUT',
+	'SPAWN_FAILURE',
+	'PATTERN_INVALID',
+] as const
+
+type ToolErrorCode = (typeof TOOL_ERROR_CODES)[number]
+const DEFAULT_MCP_LOG_LEVEL: LoggingLevel = 'warning'
+
+const MCP_LOG_LEVEL_SEVERITY: Record<LoggingLevel, number> = {
+	debug: 7,
+	info: 6,
+	notice: 5,
+	warning: 4,
+	error: 3,
+	critical: 2,
+	alert: 1,
+	emergency: 0,
+}
+
+const LOGTAPE_TO_MCP_LEVEL: Record<LogLevel, LoggingLevel> = {
+	trace: 'debug',
+	debug: 'debug',
+	info: 'info',
+	warning: 'warning',
+	error: 'error',
+	fatal: 'critical',
+}
+
+interface ToolFailure {
+	code: ToolErrorCode
+	message: string
+}
+
+class BunToolError extends Error {
+	code: ToolErrorCode
+
+	constructor(code: ToolErrorCode, message: string) {
+		super(message)
+		this.code = code
+	}
+}
+
+interface ObservabilityState {
+	clientMcpLogLevel: LoggingLevel
+}
+
+interface BunServerOptions {
+	stderrStream?: WritableStream
+}
 
 const failureSchema = z.object({
 	file: z.string(),
@@ -48,13 +129,29 @@ const testSummarySchema = z.object({
 	failures: z.array(failureSchema),
 })
 
+const coverageFileSchema = z.object({
+	file: z.string(),
+	percent: z.number(),
+})
+
 const testCoverageSchema = z.object({
 	summary: testSummarySchema,
 	coverage: z.object({
 		percent: z.number(),
-		uncovered: z.array(z.string()),
+		uncovered: z.array(coverageFileSchema),
 	}),
 })
+
+/**
+ * Resolve package version from package.json at module load.
+ *
+ * Why: keeps MCP server metadata aligned with published package version
+ * without requiring manual code updates each release.
+ */
+const PACKAGE_VERSION: string = JSON.parse(
+	readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).version
+export const SERVER_VERSION: string = PACKAGE_VERSION
 
 let _gitRootPromise: Promise<string> | null = null
 
@@ -170,15 +267,17 @@ async function resolveNearestAncestor(resolvedPath: string): Promise<string> {
  */
 export function validateShellSafePattern(pattern: string): void {
 	if (!pattern || pattern.trim() === '') {
-		throw new Error('Pattern cannot be empty')
+		throw new BunToolError('PATTERN_INVALID', 'Pattern cannot be empty')
 	}
 	if (hasShellUnsafeCharacters(pattern)) {
-		throw new Error(
+		throw new BunToolError(
+			'PATTERN_INVALID',
 			`Pattern contains unsafe characters: ${JSON.stringify(pattern)}`,
 		)
 	}
 	if (pattern.startsWith('-')) {
-		throw new Error(
+		throw new BunToolError(
+			'PATTERN_INVALID',
 			'Pattern must not start with a dash (prevents flag injection)',
 		)
 	}
@@ -204,10 +303,6 @@ function hasShellUnsafeCharacters(value: string): boolean {
 		if (unsafe.has(char)) {
 			return true
 		}
-		const code = value.charCodeAt(index)
-		if (code <= 0x1f || code === 0x7f) {
-			return true
-		}
 	}
 	return false
 }
@@ -228,7 +323,212 @@ function normalizeSummary(
 	}
 }
 
-async function spawnWithTimeout(
+/**
+ * Build Bun invocation command and sanitized environment.
+ *
+ * Why: spawn reliability and env-leak prevention should be testable as a pure
+ * function without running subprocesses.
+ */
+export function createBunInvocation(pattern?: string): {
+	cmd: string[]
+	env: Record<string, string>
+} {
+	const env: Record<string, string> = { CI: 'true' }
+	for (const key of BUN_ENV_ALLOWLIST) {
+		const value = process.env[key]
+		if (typeof value === 'string' && value.length > 0) {
+			env[key] = value
+		}
+	}
+
+	return {
+		cmd: pattern ? ['bun', 'test', '--', pattern] : ['bun', 'test'],
+		env,
+	}
+}
+
+/**
+ * Build Bun coverage invocation command and sanitized environment.
+ *
+ * Why: coverage mode is a Bun flag and must not be passed as a positional test
+ * pattern, or coverage reporting silently degrades.
+ */
+export function createBunCoverageInvocation(): {
+	cmd: string[]
+	env: Record<string, string>
+} {
+	const env: Record<string, string> = { CI: 'true' }
+	for (const key of BUN_ENV_ALLOWLIST) {
+		const value = process.env[key]
+		if (typeof value === 'string' && value.length > 0) {
+			env[key] = value
+		}
+	}
+
+	return {
+		cmd: ['bun', 'test', '--coverage'],
+		env,
+	}
+}
+
+function createBunStderrWritableStream(): WritableStream {
+	let writer: ReturnType<(typeof Bun.stderr)['writer']> | null = null
+
+	return new WritableStream({
+		start() {
+			writer = Bun.stderr.writer()
+		},
+		write(chunk: Uint8Array | string) {
+			if (!writer) {
+				return
+			}
+			if (typeof chunk === 'string') {
+				writer.write(new TextEncoder().encode(chunk))
+				return
+			}
+			writer.write(chunk)
+		},
+		async close() {
+			if (writer) {
+				try {
+					await writer.flush()
+				} catch {}
+			}
+			writer = null
+		},
+		async abort() {
+			if (writer) {
+				try {
+					await writer.flush()
+				} catch {}
+			}
+			writer = null
+		},
+	})
+}
+
+function shouldForwardMcpLog(
+	recordLevel: LogLevel,
+	clientLevel: LoggingLevel,
+): boolean {
+	const mcpLevel = LOGTAPE_TO_MCP_LEVEL[recordLevel]
+	return MCP_LOG_LEVEL_SEVERITY[mcpLevel] <= MCP_LOG_LEVEL_SEVERITY[clientLevel]
+}
+
+function stringifyLogMessage(parts: readonly unknown[]): string {
+	return parts.map((part) => String(part)).join('')
+}
+
+function createMcpProtocolSink(
+	server: McpServer,
+	state: ObservabilityState,
+): Sink {
+	return (record: LogRecord): void => {
+		if (!server.isConnected()) {
+			return
+		}
+		if (!shouldForwardMcpLog(record.level, state.clientMcpLogLevel)) {
+			return
+		}
+
+		try {
+			const result = server.sendLoggingMessage({
+				level: LOGTAPE_TO_MCP_LEVEL[record.level],
+				logger: record.category.join('.'),
+				data: {
+					message: stringifyLogMessage(record.message),
+					properties: record.properties,
+				},
+			})
+			void Promise.resolve(result).catch(() => undefined)
+		} catch {
+			// best-effort sink: drop notification when transport is no longer writable
+		}
+	}
+}
+
+async function setupObservability(
+	server: McpServer,
+	state: ObservabilityState,
+	options?: BunServerOptions,
+): Promise<void> {
+	const stderrSink = getStreamSink(
+		options?.stderrStream ?? createBunStderrWritableStream(),
+		{
+			formatter: jsonLinesFormatter,
+		},
+	)
+
+	const bufferedStderrSink = fingersCrossed(stderrSink, {
+		triggerLevel: 'warning',
+		maxBufferSize: 200,
+		isolateByCategory: 'descendant',
+		isolateByContext: {
+			keys: ['requestId'],
+			maxContexts: 50,
+			bufferTtlMs: 60_000,
+			cleanupIntervalMs: 30_000,
+		},
+	})
+
+	const mcpProtocolSink = createMcpProtocolSink(server, state)
+
+	await configure({
+		reset: true,
+		contextLocalStorage: new AsyncLocalStorage<Record<string, unknown>>(),
+		sinks: {
+			stderrBuffered: bufferedStderrSink,
+			mcpProtocol: mcpProtocolSink,
+		},
+		loggers: [
+			{
+				category: ['mcp'],
+				sinks: ['stderrBuffered', 'mcpProtocol'],
+				lowestLevel: 'debug',
+			},
+			{
+				category: ['logtape'],
+				sinks: ['stderrBuffered'],
+				lowestLevel: 'error',
+			},
+		],
+	})
+}
+
+function toToolFailure(error: unknown): ToolFailure {
+	if (error instanceof BunToolError) {
+		return { code: error.code, message: error.message }
+	}
+
+	const message = error instanceof Error ? error.message : String(error)
+	return {
+		code: 'SPAWN_FAILURE',
+		message,
+	}
+}
+
+function createToolSuccess(text: string, structured: object): CallToolResult {
+	return {
+		isError: false,
+		content: [{ type: 'text', text }],
+		structuredContent: toStructured(structured),
+	}
+}
+
+function createToolFailure(failure: ToolFailure): CallToolResult {
+	return {
+		isError: true,
+		content: [{ type: 'text', text: `${failure.code}: ${failure.message}` }],
+		structuredContent: toStructured(failure),
+	}
+}
+
+/**
+ * Spawn a subprocess and enforce timeout with SIGTERM -> SIGKILL escalation.
+ *
+ * Why: bun-runner tools must avoid hanging CI and local checks on stalled subprocesses.
+ */
+export async function spawnWithTimeout(
 	cmd: string[],
 	timeoutMs: number,
 	options?: {
@@ -240,11 +540,21 @@ async function spawnWithTimeout(
 	exitCode: number
 	timedOut: boolean
 }> {
-	const proc = Bun.spawn(cmd, {
-		env: options?.env,
-		stdout: 'pipe',
-		stderr: 'pipe',
-	})
+	const proc = (() => {
+		try {
+			return Bun.spawn(cmd, {
+				env: options?.env,
+				stdout: 'pipe',
+				stderr: 'pipe',
+			})
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error)
+			throw new BunToolError(
+				'SPAWN_FAILURE',
+				`Failed to start bun test: ${message}`,
+			)
+		}
+	})()
 
 	let timedOut = false
 	let killTimer: ReturnType<typeof setTimeout> | undefined
@@ -278,29 +588,19 @@ async function spawnWithTimeout(
 async function runBunTests(
 	pattern?: string,
 ): Promise<z.infer<typeof testSummarySchema>> {
-	const cmd = pattern ? ['bun', 'test', '--', pattern] : ['bun', 'test']
+	const invocation = createBunInvocation(pattern)
 
 	const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
-		cmd,
+		invocation.cmd,
 		TEST_TIMEOUT_MS,
-		{ env: { ...process.env, CI: 'true' } },
+		{ env: invocation.env },
 	)
 
 	if (timedOut) {
-		return {
-			passed: 0,
-			failed: 1,
-			total: 1,
-			failures: [
-				{
-					file: 'timeout',
-					line: null,
-					stack: null,
-					message:
-						'Tests timed out after 30 seconds. Possible causes: open handles, infinite loops, or accidental watch mode.',
-				},
-			],
-		}
+		throw new BunToolError(
+			'TIMEOUT',
+			`Tests timed out after ${TEST_TIMEOUT_MS / 1000} seconds. Possible causes: open handles, infinite loops, or accidental watch mode.`,
+		)
 	}
 
 	const output = `${stdout}\n${stderr}`
@@ -315,43 +615,51 @@ async function runBunTests(
 		}
 	}
 
+	const lowerStderr = stderr.toLowerCase()
+	if (
+		lowerStderr.includes('command not found') ||
+		lowerStderr.includes('not recognized') ||
+		lowerStderr.includes('enoent')
+	) {
+		throw new BunToolError(
+			'SPAWN_FAILURE',
+			`Failed to run bun test: ${stderr.trim() || 'missing stderr output'}`,
+		)
+	}
+
 	return normalizeSummary(parseBunTestOutput(output))
 }
 
 async function runBunTestCoverage(): Promise<
 	z.infer<typeof testCoverageSchema>
 > {
-	const { stdout, stderr, timedOut } = await spawnWithTimeout(
-		['bun', 'test', '--coverage'],
+	const invocation = createBunCoverageInvocation()
+	const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
+		invocation.cmd,
 		COVERAGE_TIMEOUT_MS,
-		{ env: { ...process.env, CI: 'true' } },
+		{ env: invocation.env },
 	)
 
-	const output = `${stdout}\n${stderr}`
 	if (timedOut) {
-		return {
-			summary: {
-				passed: 0,
-				failed: 1,
-				total: 1,
-				failures: [
-					{
-						file: 'timeout',
-						line: null,
-						stack: null,
-						message: 'Tests timed out after 60 seconds.',
-					},
-				],
-			},
-			coverage: { percent: 0, uncovered: [] },
-		}
+		throw new BunToolError(
+			'TIMEOUT',
+			`Coverage tests timed out after ${COVERAGE_TIMEOUT_MS / 1000} seconds.`,
+		)
 	}
 
-	const summary = normalizeSummary(parseBunTestOutput(output))
+	const output = `${stdout}\n${stderr}`
+	const parsed = parseBunTestOutput(output)
+	if (exitCode !== 0 && parsed.total === 0 && parsed.failed === 0) {
+		throw new BunToolError(
+			'SPAWN_FAILURE',
+			`bun test --coverage failed: ${stderr.trim() || stdout.trim() || 'missing output'}`,
+		)
+	}
+	const summary = normalizeSummary(parsed)
 	const coverageMatch = output.match(/(\d+(?:\.\d+)?)\s*%/)
 	const percent = coverageMatch?.[1] ? Number.parseFloat(coverageMatch[1]) : 0
 
-	const uncovered: string[] = []
+	const uncovered: Array<{ file: string; percent: number }> = []
 	for (const line of output.split('\n')) {
 		const match = line.match(/^([^\s|]+)\s*\|\s*(\d+(?:\.\d+)?)\s*%/)
 		if (!match?.[1] || !match[2]) {
@@ -359,8 +667,8 @@ async function runBunTestCoverage(): Promise<
 		}
 		const file = match[1].trim()
 		const fileCoverage = Number.parseFloat(match[2])
-		if (fileCoverage < 50 && file.endsWith('.ts')) {
-			uncovered.push(`${file} (${fileCoverage}%)`)
+		if (fileCoverage < COVERAGE_LOW_THRESHOLD && file.endsWith('.ts')) {
+			uncovered.push({ file, percent: fileCoverage })
 		}
 	}
 
@@ -376,7 +684,7 @@ function formatTestSummary(
 	context?: string,
 ): string {
 	if (format === 'json') {
-		return JSON.stringify({ ...summary, context })
+		return JSON.stringify(summary)
 	}
 
 	if (summary.failed === 0) {
@@ -421,9 +729,9 @@ function formatCoverageResult(
 	output += `Coverage: ${result.coverage.percent}%\n`
 
 	if (result.coverage.uncovered.length > 0) {
-		output += '\nFiles with low coverage (<50%):\n'
-		for (const file of result.coverage.uncovered) {
-			output += `   - ${file}\n`
+		output += `\nFiles with low coverage (<${COVERAGE_LOW_THRESHOLD}%):\n`
+		for (const entry of result.coverage.uncovered) {
+			output += `   - ${entry.file} (${entry.percent}%)\n`
 		}
 	}
 
@@ -436,11 +744,41 @@ function formatCoverageResult(
  * Why: factory construction isolates registration logic for in-memory
  * integration tests and keeps stdio lifecycle wiring separate.
  */
-export function createBunServer(): McpServer {
-	const server = new McpServer({
-		name: 'bun-runner',
-		version: '1.0.3',
-	})
+export async function createBunServer(
+	options?: BunServerOptions,
+): Promise<McpServer> {
+	const observabilityState: ObservabilityState = {
+		clientMcpLogLevel: DEFAULT_MCP_LOG_LEVEL,
+	}
+
+	const server = new McpServer(
+		{
+			name: 'bun-runner',
+			version: SERVER_VERSION,
+		},
+		{
+			capabilities: {
+				logging: {},
+			},
+		},
+	)
+	await setupObservability(server, observabilityState, options)
+
+	const lifecycleLogger = getLogger(['mcp', 'lifecycle'])
+	const runTestsLogger = getLogger(['mcp', 'tools', 'bun_runTests'])
+	const testFileLogger = getLogger(['mcp', 'tools', 'bun_testFile'])
+	const coverageLogger = getLogger(['mcp', 'tools', 'bun_testCoverage'])
+
+	server.server.setRequestHandler(
+		SetLevelRequestSchema,
+		async (request): Promise<Record<string, never>> => {
+			observabilityState.clientMcpLogLevel = request.params.level
+			runTestsLogger.info('Updated MCP logging level', {
+				mcpLevel: request.params.level,
+			})
+			return {}
+		},
+	)
 
 	server.registerTool(
 		'bun_runTests',
@@ -470,30 +808,43 @@ export function createBunServer(): McpServer {
 				openWorldHint: false,
 			},
 		},
-		async (args): Promise<CallToolResult> => {
-			try {
-				const pattern = args.pattern
-				if (pattern) {
-					validateShellSafePattern(pattern)
-					if (pattern.includes('/') || pattern.includes('..')) {
-						await validatePath(pattern)
-					}
-				}
+		async (args, extra): Promise<CallToolResult> => {
+			return withContext(
+				{
+					requestId: String(extra.requestId),
+					tool: 'bun_runTests',
+				},
+				async () => {
+					try {
+						const pattern = args.pattern
+						if (pattern) {
+							validateShellSafePattern(pattern)
+							if (pattern.includes('/') || pattern.includes('..')) {
+								await validatePath(pattern)
+							}
+						}
 
-				const summary = await runBunTests(pattern)
-				const format = args.response_format ?? 'json'
-				return {
-					isError: false,
-					content: [{ type: 'text', text: formatTestSummary(summary, format) }],
-					structuredContent: toStructured(summary),
-				}
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error)
-				return {
-					isError: true,
-					content: [{ type: 'text', text: `Error: ${message}` }],
-				}
-			}
+						const summary = await runBunTests(pattern)
+						const format = args.response_format ?? 'json'
+						runTestsLogger.info('bun_runTests completed', {
+							passed: summary.passed,
+							failed: summary.failed,
+							total: summary.total,
+						})
+						return createToolSuccess(
+							formatTestSummary(summary, format),
+							summary,
+						)
+					} catch (error) {
+						const failure = toToolFailure(error)
+						runTestsLogger.error('bun_runTests failed', {
+							code: failure.code,
+							message: failure.message,
+						})
+						return createToolFailure(failure)
+					}
+				},
+			)
 		},
 	)
 
@@ -522,28 +873,37 @@ export function createBunServer(): McpServer {
 				openWorldHint: false,
 			},
 		},
-		async (args): Promise<CallToolResult> => {
-			try {
-				const validatedFile = await validatePath(args.file)
-				const summary = await runBunTests(validatedFile)
-				const format = args.response_format ?? 'json'
-				return {
-					isError: false,
-					content: [
-						{
-							type: 'text',
-							text: formatTestSummary(summary, format, args.file),
-						},
-					],
-					structuredContent: toStructured(summary),
-				}
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error)
-				return {
-					isError: true,
-					content: [{ type: 'text', text: `Error: ${message}` }],
-				}
-			}
+		async (args, extra): Promise<CallToolResult> => {
+			return withContext(
+				{
+					requestId: String(extra.requestId),
+					tool: 'bun_testFile',
+				},
+				async () => {
+					try {
+						const validatedFile = await validatePath(args.file)
+						const summary = await runBunTests(validatedFile)
+						const format = args.response_format ?? 'json'
+						testFileLogger.info('bun_testFile completed', {
+							file: args.file,
+							passed: summary.passed,
+							failed: summary.failed,
+						})
+						return createToolSuccess(
+							formatTestSummary(summary, format, args.file),
+							summary,
+						)
+					} catch (error) {
+						const failure = toToolFailure(error)
+						testFileLogger.error('bun_testFile failed', {
+							code: failure.code,
+							message: failure.message,
+							file: args.file,
+						})
+						return createToolFailure(failure)
+					}
+				},
+			)
 		},
 	)
 
@@ -568,26 +928,42 @@ export function createBunServer(): McpServer {
 				openWorldHint: false,
 			},
 		},
-		async (args): Promise<CallToolResult> => {
-			try {
-				const result = await runBunTestCoverage()
-				const format = args.response_format ?? 'json'
-				return {
-					isError: false,
-					content: [
-						{ type: 'text', text: formatCoverageResult(result, format) },
-					],
-					structuredContent: toStructured(result),
-				}
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error)
-				return {
-					isError: true,
-					content: [{ type: 'text', text: `Error: ${message}` }],
-				}
-			}
+		async (args, extra): Promise<CallToolResult> => {
+			return withContext(
+				{
+					requestId: String(extra.requestId),
+					tool: 'bun_testCoverage',
+				},
+				async () => {
+					try {
+						const result = await runBunTestCoverage()
+						const format = args.response_format ?? 'json'
+						coverageLogger.info('bun_testCoverage completed', {
+							failed: result.summary.failed,
+							passed: result.summary.passed,
+							coveragePercent: result.coverage.percent,
+						})
+						return createToolSuccess(
+							formatCoverageResult(result, format),
+							result,
+						)
+					} catch (error) {
+						const failure = toToolFailure(error)
+						coverageLogger.error('bun_testCoverage failed', {
+							code: failure.code,
+							message: failure.message,
+						})
+						return createToolFailure(failure)
+					}
+				},
+			)
 		},
 	)
+
+	lifecycleLogger.info('bun-runner server initialized', {
+		version: SERVER_VERSION,
+		defaultMcpLogLevel: observabilityState.clientMcpLogLevel,
+	})
 
 	return server
 }
@@ -596,15 +972,24 @@ export function createBunServer(): McpServer {
  * Start the stdio MCP server process.
  */
 export async function startBunServer(): Promise<void> {
-	const server = createBunServer()
+	const server = await createBunServer()
 	const transport = new StdioServerTransport()
 	let shuttingDown = false
+	const lifecycleLogger = getLogger(['mcp', 'lifecycle'])
 
 	const shutdown = async () => {
 		if (shuttingDown) {
 			return
 		}
 		shuttingDown = true
+		lifecycleLogger.info('Shutting down bun-runner server')
+		try {
+			await dispose()
+		} catch (error) {
+			lifecycleLogger.error('Failed to dispose logger sinks cleanly', {
+				error: error instanceof Error ? error.message : String(error),
+			})
+		}
 		await server.close()
 		process.exit(0)
 	}
@@ -614,6 +999,7 @@ export async function startBunServer(): Promise<void> {
 	}
 
 	await server.connect(transport)
+	lifecycleLogger.info('bun-runner server connected to stdio transport')
 	process.stdin.resume()
 
 	process.on('SIGINT', () => {

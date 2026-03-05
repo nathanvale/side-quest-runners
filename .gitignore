@@ -47,6 +47,11 @@ CLAUDE.local.md
 # Test artifacts
 test-results/
 .vitest/
+.smoke-sandboxes/
+reports/smoke-sandboxes/
+reports/ab/archive/
+reports/ab/current-run.json
+reports/ab/thresholds.json
 
 #Obsidian vault
 .vault/

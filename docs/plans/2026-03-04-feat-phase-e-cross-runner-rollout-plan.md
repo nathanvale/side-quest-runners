@@ -1,7 +1,7 @@
 ---
 title: "Phase E: Cross-Runner Rollout"
 type: feat
-status: active
+status: completed
 date: 2026-03-04
 priority: p2
 origin: docs/brainstorms/2026-03-04-tsc-runner-uplift.md
@@ -76,21 +76,28 @@ From **todo 017** (biome_lintFix subprocess pattern):
 ## Acceptance Criteria
 
 ### bun-runner
-- [ ] All 3 tools have description, title, outputSchema, annotations from contract artifacts
-- [ ] Compact JSON, no em dashes, version synced
-- [ ] Env allowlist, structured errors
-- [ ] Response layer and LogTape dual-channel logging
-- [ ] `bun_testCoverage.uncovered` uses `{ file, percent }` instead of formatted string
+- [x] All 3 tools have description, title, outputSchema, annotations from contract artifacts
+- [x] Compact JSON, no em dashes, version synced
+- [x] Env allowlist, structured errors
+- [x] Response layer and LogTape dual-channel logging
+- [x] `bun_testCoverage.uncovered` uses `{ file, percent }` instead of formatted string
 
 ### biome-runner
-- [ ] All 3 tools have description, title, outputSchema, annotations from contract artifacts
-- [ ] Compact JSON, no em dashes, version synced
-- [ ] Env allowlist, structured errors
-- [ ] Response layer and LogTape dual-channel logging
-- [ ] `biome_lintFix` subprocess count optimized or documented with timing data
+- [x] All 3 tools have description, title, outputSchema, annotations from contract artifacts
+- [x] Compact JSON, no em dashes, version synced
+- [x] Env allowlist, structured errors
+- [x] Response layer and LogTape dual-channel logging
+- [x] `biome_lintFix` subprocess count optimized or documented with timing data
 
 ### Parity
-- [ ] Cross-runner parity checklist fully green (all 13 capabilities across all 3 runners)
+- [x] Cross-runner parity checklist fully green (all 13 capabilities across all 3 runners)
+
+## Rollout Notes
+
+- `biome_lintFix` subprocess flow was optimized from 3 subprocesses to 2 by removing the pre-fix snapshot pass and keeping:
+  1) `biome check --write --reporter=json`
+  2) one post-fix `biome check --reporter=json` for remaining diagnostics
+- Timing sample (2026-03-05): in-memory MCP call to `biome_lintFix` on `.` completed in `204ms` (`isError: false`).
 
 ## Sources
 
