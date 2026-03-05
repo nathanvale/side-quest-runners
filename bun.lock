@@ -26,6 +26,7 @@
         "biome-runner": "./dist/index.js",
       },
       "dependencies": {
+        "@logtape/logtape": "^2.0.4",
         "@modelcontextprotocol/sdk": "^1.27.1",
         "zod": "^3.25",
       },
@@ -37,6 +38,7 @@
         "bun-runner": "./dist/index.js",
       },
       "dependencies": {
+        "@logtape/logtape": "^2.0.4",
         "@modelcontextprotocol/sdk": "^1.27.1",
         "zod": "^3.25",
       },

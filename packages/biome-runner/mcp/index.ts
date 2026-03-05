@@ -8,20 +8,37 @@
  * Provides tools to run Biome linting and formatting with structured output.
  */
 
-import { realpath } from 'node:fs/promises'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { readFileSync } from 'node:fs'
+import { realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
+import {
+	configure,
+	dispose,
+	fingersCrossed,
+	getLogger,
+	getStreamSink,
+	jsonLinesFormatter,
+	type LogLevel,
+	type LogRecord,
+	type Sink,
+	withContext,
+} from '@logtape/logtape'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import type {
+	CallToolResult,
+	LoggingLevel,
+} from '@modelcontextprotocol/sdk/types.js'
+import { SetLevelRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 
 /**
  * Bridge Zod-inferred output types to the SDK's Record<string, unknown>.
  *
- * Why: CallToolResult.structuredContent is typed as Record<string, unknown>),
- * but our Zod-inferred types (LintSummary, etc.) have concrete keys that
- * TypeScript considers structurally incompatible. This helper centralizes
- * the unavoidable cast so tool handlers stay clean.
+ * Why: CallToolResult.structuredContent is typed as Record<string, unknown>,
+ * but our Zod-inferred types have concrete keys that TypeScript considers
+ * structurally incompatible. This helper centralizes the unavoidable cast.
  */
 function toStructured(value: object): Record<string, unknown> {
 	return value as Record<string, unknown>
@@ -59,6 +76,59 @@ interface BiomeReport {
 }
 
 const BIOME_TIMEOUT_MS = 30_000
+const BIOME_ENV_ALLOWLIST = [
+	'PATH',
+	'HOME',
+	'NODE_PATH',
+	'BUN_INSTALL',
+	'TMPDIR',
+] as const
+const TOOL_ERROR_CODES = ['SPAWN_FAILURE', 'PATH_NOT_FOUND'] as const
+
+type ToolErrorCode = (typeof TOOL_ERROR_CODES)[number]
+const DEFAULT_MCP_LOG_LEVEL: LoggingLevel = 'warning'
+
+const MCP_LOG_LEVEL_SEVERITY: Record<LoggingLevel, number> = {
+	debug: 7,
+	info: 6,
+	notice: 5,
+	warning: 4,
+	error: 3,
+	critical: 2,
+	alert: 1,
+	emergency: 0,
+}
+
+const LOGTAPE_TO_MCP_LEVEL: Record<LogLevel, LoggingLevel> = {
+	trace: 'debug',
+	debug: 'debug',
+	info: 'info',
+	warning: 'warning',
+	error: 'error',
+	fatal: 'critical',
+}
+
+interface ToolFailure {
+	code: ToolErrorCode
+	message: string
+}
+
+class BiomeToolError extends Error {
+	code: ToolErrorCode
+
+	constructor(code: ToolErrorCode, message: string) {
+		super(message)
+		this.code = code
+	}
+}
+
+interface ObservabilityState {
+	clientMcpLogLevel: LoggingLevel
+}
+
+interface BiomeServerOptions {
+	stderrStream?: WritableStream
+}
 
 const lintDiagnosticSchema = z.object({
 	file: z.string(),
@@ -77,8 +147,6 @@ const lintSummarySchema = z.object({
 
 const lintFixSchema = z.object({
 	fixed: z.number(),
-	formatFixed: z.number(),
-	lintFixed: z.number(),
 	remaining: lintSummarySchema,
 })
 
@@ -86,6 +154,17 @@ const formatCheckSchema = z.object({
 	formatted: z.boolean(),
 	unformattedFiles: z.array(z.string()),
 })
+
+/**
+ * Resolve package version from package.json at module load.
+ *
+ * Why: keeps MCP server metadata aligned with published package version
+ * without requiring manual code updates each release.
+ */
+const PACKAGE_VERSION: string = JSON.parse(
+	readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).version
+export const SERVER_VERSION: string = PACKAGE_VERSION
 
 let _gitRootPromise: Promise<string> | null = null
 
@@ -277,6 +356,185 @@ export function parseBiomeOutput(stdout: string): LintSummary {
 	}
 }
 
+/**
+ * Build biome invocation command and sanitized environment.
+ *
+ * Why: spawn reliability and env-leak prevention should be testable as a pure
+ * function without running subprocesses.
+ */
+export function createBiomeInvocation(args: {
+	subcommand: 'check' | 'format'
+	path: string
+	write?: boolean
+}): { cmd: string[]; env: Record<string, string> } {
+	const env: Record<string, string> = { CI: 'true' }
+	for (const key of BIOME_ENV_ALLOWLIST) {
+		const value = process.env[key]
+		if (typeof value === 'string' && value.length > 0) {
+			env[key] = value
+		}
+	}
+
+	const cmd = ['bunx', '@biomejs/biome', args.subcommand]
+	if (args.write) {
+		cmd.push('--write')
+	}
+	cmd.push('--reporter=json', args.path)
+	return { cmd, env }
+}
+
+function createBunStderrWritableStream(): WritableStream {
+	let writer: ReturnType<(typeof Bun.stderr)['writer']> | null = null
+
+	return new WritableStream({
+		start() {
+			writer = Bun.stderr.writer()
+		},
+		write(chunk: Uint8Array | string) {
+			if (!writer) {
+				return
+			}
+			if (typeof chunk === 'string') {
+				writer.write(new TextEncoder().encode(chunk))
+				return
+			}
+			writer.write(chunk)
+		},
+		async close() {
+			if (writer) {
+				try {
+					await writer.flush()
+				} catch {}
+			}
+			writer = null
+		},
+		async abort() {
+			if (writer) {
+				try {
+					await writer.flush()
+				} catch {}
+			}
+			writer = null
+		},
+	})
+}
+
+function shouldForwardMcpLog(
+	recordLevel: LogLevel,
+	clientLevel: LoggingLevel,
+): boolean {
+	const mcpLevel = LOGTAPE_TO_MCP_LEVEL[recordLevel]
+	return MCP_LOG_LEVEL_SEVERITY[mcpLevel] <= MCP_LOG_LEVEL_SEVERITY[clientLevel]
+}
+
+function stringifyLogMessage(parts: readonly unknown[]): string {
+	return parts.map((part) => String(part)).join('')
+}
+
+function createMcpProtocolSink(
+	server: McpServer,
+	state: ObservabilityState,
+): Sink {
+	return (record: LogRecord): void => {
+		if (!server.isConnected()) {
+			return
+		}
+		if (!shouldForwardMcpLog(record.level, state.clientMcpLogLevel)) {
+			return
+		}
+
+		try {
+			const result = server.sendLoggingMessage({
+				level: LOGTAPE_TO_MCP_LEVEL[record.level],
+				logger: record.category.join('.'),
+				data: {
+					message: stringifyLogMessage(record.message),
+					properties: record.properties,
+				},
+			})
+			void Promise.resolve(result).catch(() => undefined)
+		} catch {
+			// best-effort sink: drop notification when transport is no longer writable
+		}
+	}
+}
+
+async function setupObservability(
+	server: McpServer,
+	state: ObservabilityState,
+	options?: BiomeServerOptions,
+): Promise<void> {
+	const stderrSink = getStreamSink(
+		options?.stderrStream ?? createBunStderrWritableStream(),
+		{
+			formatter: jsonLinesFormatter,
+		},
+	)
+
+	const bufferedStderrSink = fingersCrossed(stderrSink, {
+		triggerLevel: 'warning',
+		maxBufferSize: 200,
+		isolateByCategory: 'descendant',
+		isolateByContext: {
+			keys: ['requestId'],
+			maxContexts: 50,
+			bufferTtlMs: 60_000,
+			cleanupIntervalMs: 30_000,
+		},
+	})
+
+	const mcpProtocolSink = createMcpProtocolSink(server, state)
+
+	await configure({
+		reset: true,
+		contextLocalStorage: new AsyncLocalStorage<Record<string, unknown>>(),
+		sinks: {
+			stderrBuffered: bufferedStderrSink,
+			mcpProtocol: mcpProtocolSink,
+		},
+		loggers: [
+			{
+				category: ['mcp'],
+				sinks: ['stderrBuffered', 'mcpProtocol'],
+				lowestLevel: 'debug',
+			},
+			{
+				category: ['logtape'],
+				sinks: ['stderrBuffered'],
+				lowestLevel: 'error',
+			},
+		],
+	})
+}
+
+function toToolFailure(error: unknown): ToolFailure {
+	if (error instanceof BiomeToolError) {
+		return { code: error.code, message: error.message }
+	}
+
+	const message = error instanceof Error ? error.message : String(error)
+	return {
+		code: 'SPAWN_FAILURE',
+		message,
+	}
+}
+
+function createToolSuccess(text: string, structured: object): CallToolResult {
+	return {
+		isError: false,
+		content: [{ type: 'text', text }],
+		structuredContent: toStructured(structured),
+	}
+}
+
+function createToolFailure(failure: ToolFailure): CallToolResult {
+	return {
+		isError: true,
+		content: [{ type: 'text', text: `${failure.code}: ${failure.message}` }],
+		structuredContent: toStructured(failure),
+	}
+}
+
 async function spawnWithTimeout(
 	cmd: string[],
 	options?: {
@@ -290,12 +548,22 @@ async function spawnWithTimeout(
 	exitCode: number
 	timedOut: boolean
 }> {
-	const proc = Bun.spawn(cmd, {
-		cwd: options?.cwd,
-		env: options?.env,
-		stdout: 'pipe',
-		stderr: 'pipe',
-	})
+	const proc = (() => {
+		try {
+			return Bun.spawn(cmd, {
+				cwd: options?.cwd,
+				env: options?.env,
+				stdout: 'pipe',
+				stderr: 'pipe',
+			})
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error)
+			throw new BiomeToolError(
+				'SPAWN_FAILURE',
+				`Failed to start Biome command: ${message}`,
+			)
+		}
+	})()
 
 	let timedOut = false
 	let killTimer: ReturnType<typeof setTimeout> | undefined
@@ -320,27 +588,32 @@ async function spawnWithTimeout(
 	return { stdout, stderr, exitCode, timedOut }
 }
 
+async function ensurePathExists(validatedPath: string): Promise<void> {
+	try {
+		await stat(validatedPath)
+	} catch {
+		throw new BiomeToolError(
+			'PATH_NOT_FOUND',
+			`Path not found: ${validatedPath}`,
+		)
+	}
+}
+
 async function runBiomeCheck(inputPath = '.'): Promise<LintSummary> {
-	const { stdout, stderr, timedOut } = await spawnWithTimeout(
-		['bunx', '@biomejs/biome', 'check', '--reporter=json', inputPath],
-		{ timeoutMs: BIOME_TIMEOUT_MS },
-	)
+	const invocation = createBiomeInvocation({
+		subcommand: 'check',
+		path: inputPath,
+	})
+	const { stdout, stderr, timedOut } = await spawnWithTimeout(invocation.cmd, {
+		env: invocation.env,
+		timeoutMs: BIOME_TIMEOUT_MS,
+	})
 
 	if (timedOut) {
-		return {
-			errorCount: 1,
-			warningCount: 0,
-			diagnostics: [
-				{
-					file: 'timeout',
-					line: 0,
-					message: `Biome check timed out after ${BIOME_TIMEOUT_MS / 1000}s`,
-					code: 'timeout',
-					severity: 'error',
-					suggestion: null,
-				},
-			],
-		}
+		throw new BiomeToolError(
+			'SPAWN_FAILURE',
+			`Biome check timed out after ${BIOME_TIMEOUT_MS / 1000}s`,
+		)
 	}
 
 	return parseBiomeOutput(stdout || stderr)
@@ -349,51 +622,37 @@ async function runBiomeCheck(inputPath = '.'): Promise<LintSummary> {
 async function runBiomeFix(
 	inputPath = '.',
 ): Promise<z.infer<typeof lintFixSchema>> {
-	// Snapshot diagnostics before fix so we can diff by category.
-	const before = await runBiomeCheck(inputPath)
-
-	// biome check --write applies both formatting and lint fixes in one pass,
-	// so a separate biome format --write step is unnecessary.
-	const fix = await spawnWithTimeout(
-		[
-			'bunx',
-			'@biomejs/biome',
-			'check',
-			'--write',
-			'--reporter=json',
-			inputPath,
-		],
-		{ timeoutMs: BIOME_TIMEOUT_MS },
-	)
+	// biome check --write applies both formatting and lint fixes in one pass.
+	// We keep one post-fix check subprocess to return remaining diagnostics.
+	const fixInvocation = createBiomeInvocation({
+		subcommand: 'check',
+		path: inputPath,
+		write: true,
+	})
+	const fix = await spawnWithTimeout(fixInvocation.cmd, {
+		env: fixInvocation.env,
+		timeoutMs: BIOME_TIMEOUT_MS,
+	})
 
 	if (fix.timedOut) {
-		throw new Error(
+		throw new BiomeToolError(
+			'SPAWN_FAILURE',
 			`Biome check --write timed out after ${BIOME_TIMEOUT_MS / 1000}s`,
 		)
 	}
 
 	const remaining = await runBiomeCheck(inputPath)
 
-	// Derive fix counts by diffing before/after diagnostics by category.
-	// Lint diagnostics use 'lint/<group>/<ruleName>' (e.g. 'lint/suspicious/noDoubleEquals').
-	// Format issues don't carry a 'format/' prefix -- they are the remaining
-	// resolved diagnostics not categorised as lint.
-	const totalBefore = before.diagnostics.length
-	const totalAfter = remaining.diagnostics.length
-	const lintBefore = before.diagnostics.filter((d) =>
-		d.code.startsWith('lint/'),
-	).length
-	const lintAfter = remaining.diagnostics.filter((d) =>
-		d.code.startsWith('lint/'),
-	).length
-
-	const lintFixed = Math.max(0, lintBefore - lintAfter)
-	const formatFixed = Math.max(0, totalBefore - totalAfter - lintFixed)
+	const report = parseBiomeOutput(fix.stdout || fix.stderr)
+	const fixed = Math.max(
+		0,
+		report.errorCount +
+			report.warningCount -
+			(remaining.errorCount + remaining.warningCount),
+	)
 
 	return {
-		fixed: formatFixed + lintFixed,
-		formatFixed,
-		lintFixed,
+		fixed,
 		remaining,
 	}
 }
@@ -401,13 +660,21 @@ async function runBiomeFix(
 async function runBiomeFormatCheck(
 	inputPath = '.',
 ): Promise<z.infer<typeof formatCheckSchema>> {
+	const invocation = createBiomeInvocation({
+		subcommand: 'format',
+		path: inputPath,
+	})
 	const { stdout, exitCode, timedOut } = await spawnWithTimeout(
-		['bunx', '@biomejs/biome', 'format', '--reporter=json', inputPath],
-		{ timeoutMs: BIOME_TIMEOUT_MS },
+		invocation.cmd,
+		{
+			env: invocation.env,
+			timeoutMs: BIOME_TIMEOUT_MS,
+		},
 	)
 
 	if (timedOut) {
-		throw new Error(
+		throw new BiomeToolError(
+			'SPAWN_FAILURE',
 			`Biome format check timed out after ${BIOME_TIMEOUT_MS / 1000}s`,
 		)
 	}
@@ -516,18 +783,48 @@ function formatFormatCheckResult(
  *
  * Why: factory construction enables direct InMemoryTransport integration tests.
  */
-export function createBiomeServer(): McpServer {
-	const server = new McpServer({
-		name: 'biome-runner',
-		version: '1.0.2',
-	})
+export async function createBiomeServer(
+	options?: BiomeServerOptions,
+): Promise<McpServer> {
+	const observabilityState: ObservabilityState = {
+		clientMcpLogLevel: DEFAULT_MCP_LOG_LEVEL,
+	}
+
+	const server = new McpServer(
+		{
+			name: 'biome-runner',
+			version: SERVER_VERSION,
+		},
+		{
+			capabilities: {
+				logging: {},
+			},
+		},
+	)
+	await setupObservability(server, observabilityState, options)
+
+	const lifecycleLogger = getLogger(['mcp', 'lifecycle'])
+	const lintCheckLogger = getLogger(['mcp', 'tools', 'biome_lintCheck'])
+	const lintFixLogger = getLogger(['mcp', 'tools', 'biome_lintFix'])
+	const formatCheckLogger = getLogger(['mcp', 'tools', 'biome_formatCheck'])
+
+	server.server.setRequestHandler(
+		SetLevelRequestSchema,
+		async (request): Promise<Record<string, never>> => {
+			observabilityState.clientMcpLogLevel = request.params.level
+			lintCheckLogger.info('Updated MCP logging level', {
+				mcpLevel: request.params.level,
+			})
+			return {}
+		},
+	)
 
 	server.registerTool(
 		'biome_lintCheck',
 		{
 			title: 'Biome Lint Checker',
 			description:
-				'Run Biome lint checks (both lint rules and formatting) on a file or directory. Returns error/warning counts and structured diagnostics. Read-only. Does not write fixes. Use biome_lintFix to apply fixes.',
+				'Check files with Biome and return lint/format diagnostics without writing changes. Use after edits. Read-only. No fixes or type checks. Use biome_lintFix to fix; use tsc_check for types.',
 			inputSchema: z.object({
 				path: z
 					.string()
@@ -550,32 +847,47 @@ export function createBiomeServer(): McpServer {
 				openWorldHint: false,
 			},
 		},
-		async (args): Promise<CallToolResult> => {
-			try {
-				const validatedPath = await validatePathOrDefault(args.path)
-				const summary = await runBiomeCheck(validatedPath)
-				const format = args.response_format ?? 'json'
-				return {
-					isError: false,
-					content: [{ type: 'text', text: formatLintSummary(summary, format) }],
-					structuredContent: toStructured(summary),
-				}
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error)
-				return {
-					isError: true,
-					content: [{ type: 'text', text: `Error: ${message}` }],
-				}
-			}
+		async (args, extra): Promise<CallToolResult> => {
+			return withContext(
+				{
+					requestId: String(extra.requestId),
+					tool: 'biome_lintCheck',
+				},
+				async () => {
+					try {
+						const validatedPath = await validatePathOrDefault(args.path)
+						await ensurePathExists(validatedPath)
+						const summary = await runBiomeCheck(validatedPath)
+						const format = args.response_format ?? 'json'
+						lintCheckLogger.info('biome_lintCheck completed', {
+							path: validatedPath,
+							errorCount: summary.errorCount,
+							warningCount: summary.warningCount,
+						})
+						return createToolSuccess(
+							formatLintSummary(summary, format),
+							summary,
+						)
+					} catch (error) {
+						const failure = toToolFailure(error)
+						lintCheckLogger.error('biome_lintCheck failed', {
+							code: failure.code,
+							message: failure.message,
+							path: args.path ?? null,
+						})
+						return createToolFailure(failure)
+					}
+				},
+			)
 		},
 	)
 
 	server.registerTool(
 		'biome_lintFix',
 		{
-			title: 'Biome Lint Fixer',
+			title: 'Biome Lint & Format Fixer',
 			description:
-				'Run Biome format/check with --write to auto-fix issues. Returns fixed counts and remaining diagnostics. Writes files. Use biome_lintCheck for read-only inspection.',
+				'Auto-fix Biome lint/format issues with --write, then return remaining diagnostics. Use after biome_lintCheck. Modifies files. No type checks. Use biome_lintCheck for read-only checks; use tsc_check for types.',
 			inputSchema: z.object({
 				path: z
 					.string()
@@ -598,25 +910,39 @@ export function createBiomeServer(): McpServer {
 				openWorldHint: false,
 			},
 		},
-		async (args): Promise<CallToolResult> => {
-			try {
-				const validatedPath = await validatePathOrDefault(args.path)
-				const result = await runBiomeFix(validatedPath)
-				const format = args.response_format ?? 'json'
-				return {
-					isError: false,
-					content: [
-						{ type: 'text', text: formatLintFixResult(result, format) },
-					],
-					structuredContent: toStructured(result),
-				}
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error)
-				return {
-					isError: true,
-					content: [{ type: 'text', text: `Error: ${message}` }],
-				}
-			}
+		async (args, extra): Promise<CallToolResult> => {
+			return withContext(
+				{
+					requestId: String(extra.requestId),
+					tool: 'biome_lintFix',
+				},
+				async () => {
+					try {
+						const validatedPath = await validatePathOrDefault(args.path)
+						await ensurePathExists(validatedPath)
+						const result = await runBiomeFix(validatedPath)
+						const format = args.response_format ?? 'json'
+						lintFixLogger.info('biome_lintFix completed', {
+							path: validatedPath,
+							fixed: result.fixed,
+							remainingErrors: result.remaining.errorCount,
+							remainingWarnings: result.remaining.warningCount,
+						})
+						return createToolSuccess(
+							formatLintFixResult(result, format),
+							result,
+						)
+					} catch (error) {
+						const failure = toToolFailure(error)
+						lintFixLogger.error('biome_lintFix failed', {
+							code: failure.code,
+							message: failure.message,
+							path: args.path ?? null,
+						})
+						return createToolFailure(failure)
+					}
+				},
+			)
 		},
 	)
 
@@ -625,7 +951,7 @@ export function createBiomeServer(): McpServer {
 		{
 			title: 'Biome Format Checker',
 			description:
-				'Check whether files are formatted with Biome without writing changes. Returns formatted status and unformatted files. Read-only. Use biome_lintFix to apply formatting.',
+				'Check Biome formatting compliance and list unformatted files. Use for CI/pre-commit format gates. Read-only. No fixes or type checks. Use biome_lintFix to fix formatting; biome_lintCheck for lint diagnostics.',
 			inputSchema: z.object({
 				path: z
 					.string()
@@ -648,27 +974,45 @@ export function createBiomeServer(): McpServer {
 				openWorldHint: false,
 			},
 		},
-		async (args): Promise<CallToolResult> => {
-			try {
-				const validatedPath = await validatePathOrDefault(args.path)
-				const result = await runBiomeFormatCheck(validatedPath)
-				const format = args.response_format ?? 'json'
-				return {
-					isError: false,
-					content: [
-						{ type: 'text', text: formatFormatCheckResult(result, format) },
-					],
-					structuredContent: toStructured(result),
-				}
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error)
-				return {
-					isError: true,
-					content: [{ type: 'text', text: `Error: ${message}` }],
-				}
-			}
+		async (args, extra): Promise<CallToolResult> => {
+			return withContext(
+				{
+					requestId: String(extra.requestId),
+					tool: 'biome_formatCheck',
+				},
+				async () => {
+					try {
+						const validatedPath = await validatePathOrDefault(args.path)
+						await ensurePathExists(validatedPath)
+						const result = await runBiomeFormatCheck(validatedPath)
+						const format = args.response_format ?? 'json'
+						formatCheckLogger.info('biome_formatCheck completed', {
+							path: validatedPath,
+							formatted: result.formatted,
+							unformattedCount: result.unformattedFiles.length,
+						})
+						return createToolSuccess(
+							formatFormatCheckResult(result, format),
+							result,
+						)
+					} catch (error) {
+						const failure = toToolFailure(error)
+						formatCheckLogger.error('biome_formatCheck failed', {
+							code: failure.code,
+							message: failure.message,
+							path: args.path ?? null,
+						})
+						return createToolFailure(failure)
+					}
+				},
+			)
 		},
 	)
+
+	lifecycleLogger.info('biome-runner server initialized', {
+		version: SERVER_VERSION,
+		defaultMcpLogLevel: observabilityState.clientMcpLogLevel,
+	})
 
 	return server
 }
@@ -677,15 +1021,24 @@ export function createBiomeServer(): McpServer {
  * Start the stdio MCP server process.
  */
 export async function startBiomeServer(): Promise<void> {
-	const server = createBiomeServer()
+	const server = await createBiomeServer()
 	const transport = new StdioServerTransport()
 	let shuttingDown = false
+	const lifecycleLogger = getLogger(['mcp', 'lifecycle'])
 
 	const shutdown = async () => {
 		if (shuttingDown) {
 			return
 		}
 		shuttingDown = true
+		lifecycleLogger.info('Shutting down biome-runner server')
+		try {
+			await dispose()
+		} catch (error) {
+			lifecycleLogger.error('Failed to dispose logger sinks cleanly', {
+				error: error instanceof Error ? error.message : String(error),
+			})
+		}
 		await server.close()
 		process.exit(0)
 	}
@@ -695,6 +1048,7 @@ export async function startBiomeServer(): Promise<void> {
 	}
 
 	await server.connect(transport)
+	lifecycleLogger.info('biome-runner server connected to stdio transport')
 	process.stdin.resume()
 
 	process.on('SIGINT', () => {

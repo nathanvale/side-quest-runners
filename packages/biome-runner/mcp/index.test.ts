@@ -1,12 +1,15 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { rm, symlink } from 'node:fs/promises'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import {
 	_resetGitRootCache,
+	createBiomeInvocation,
 	createBiomeServer,
 	parseBiomeOutput,
+	SERVER_VERSION,
 	validatePath,
 	validatePathOrDefault,
 } from './index'
@@ -79,9 +82,70 @@ describe('path validation', () => {
 	})
 })
 
+describe('createBiomeInvocation', () => {
+	test('applies strict env allowlist plus CI', () => {
+		const previousNodePath = process.env.NODE_PATH
+		const previousBunInstall = process.env.BUN_INSTALL
+		const previousTmpdir = process.env.TMPDIR
+		try {
+			process.env.NODE_PATH = '/tmp/node-path'
+			process.env.BUN_INSTALL = '/tmp/bun-install'
+			process.env.TMPDIR = '/tmp'
+
+			const invocation = createBiomeInvocation({
+				subcommand: 'check',
+				path: 'packages/biome-runner',
+				write: true,
+			})
+			const keys = Object.keys(invocation.env)
+
+			expect(keys.includes('CI')).toBe(true)
+			expect(keys.includes('PATH')).toBe(true)
+			expect(keys.includes('HOME')).toBe(true)
+			expect(keys.includes('NODE_PATH')).toBe(true)
+			expect(keys.includes('BUN_INSTALL')).toBe(true)
+			expect(keys.includes('TMPDIR')).toBe(true)
+			expect(keys.includes('AWS_SECRET_ACCESS_KEY')).toBe(false)
+			expect(keys.includes('GITHUB_TOKEN')).toBe(false)
+			expect(invocation.cmd).toEqual([
+				'bunx',
+				'@biomejs/biome',
+				'check',
+				'--write',
+				'--reporter=json',
+				'packages/biome-runner',
+			])
+		} finally {
+			if (previousNodePath === undefined) {
+				delete process.env.NODE_PATH
+			} else {
+				process.env.NODE_PATH = previousNodePath
+			}
+			if (previousBunInstall === undefined) {
+				delete process.env.BUN_INSTALL
+			} else {
+				process.env.BUN_INSTALL = previousBunInstall
+			}
+			if (previousTmpdir === undefined) {
+				delete process.env.TMPDIR
+			} else {
+				process.env.TMPDIR = previousTmpdir
+			}
+		}
+	})
+})
+
 describe('biome tools integration', () => {
+	test('syncs MCP server version with package.json', () => {
+		const packageJson = JSON.parse(
+			readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+		) as { version: string }
+
+		expect(SERVER_VERSION).toBe(packageJson.version)
+	})
+
 	test('exposes all three tools via tools/list', async () => {
-		const server = createBiomeServer()
+		const server = await createBiomeServer()
 		const client = new Client({ name: 'biome-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -98,7 +162,7 @@ describe('biome tools integration', () => {
 
 			const lintFix = list.tools.find((entry) => entry.name === 'biome_lintFix')
 			expect(lintFix).toBeDefined()
-			expect(lintFix?.title).toBe('Biome Lint Fixer')
+			expect(lintFix?.title).toBe('Biome Lint & Format Fixer')
 			expect(lintFix?.annotations?.destructiveHint).toBe(true)
 			expect(lintFix?.outputSchema).toBeDefined()
 
@@ -114,7 +178,7 @@ describe('biome tools integration', () => {
 
 	test('lintCheck returns structuredContent', async () => {
 		_resetGitRootCache()
-		const server = createBiomeServer()
+		const server = await createBiomeServer()
 		const client = new Client({ name: 'biome-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -124,7 +188,7 @@ describe('biome tools integration', () => {
 			const result = await client.callTool({
 				name: 'biome_lintCheck',
 				arguments: {
-					path: 'packages/biome-runner',
+					path: '.',
 					response_format: 'json',
 				},
 			})
@@ -148,7 +212,7 @@ describe('biome tools integration', () => {
 
 	test('format check returns structuredContent', async () => {
 		_resetGitRootCache()
-		const server = createBiomeServer()
+		const server = await createBiomeServer()
 		const client = new Client({ name: 'biome-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -158,7 +222,7 @@ describe('biome tools integration', () => {
 			const result = await client.callTool({
 				name: 'biome_formatCheck',
 				arguments: {
-					path: 'packages/biome-runner',
+					path: '.',
 					response_format: 'json',
 				},
 			})

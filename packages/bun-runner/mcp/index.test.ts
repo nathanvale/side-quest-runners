@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import {
 	_resetGitRootCache,
+	createBunInvocation,
 	createBunServer,
+	SERVER_VERSION,
 	validatePath,
 	validateShellSafePattern,
 } from './index'
@@ -306,9 +309,59 @@ describe('validation helpers', () => {
 	})
 })
 
+describe('createBunInvocation', () => {
+	test('applies strict env allowlist plus CI', () => {
+		const previousNodePath = process.env.NODE_PATH
+		const previousBunInstall = process.env.BUN_INSTALL
+		const previousTmpdir = process.env.TMPDIR
+		try {
+			process.env.NODE_PATH = '/tmp/node-path'
+			process.env.BUN_INSTALL = '/tmp/bun-install'
+			process.env.TMPDIR = '/tmp'
+
+			const invocation = createBunInvocation('auth')
+			const keys = Object.keys(invocation.env)
+
+			expect(keys.includes('CI')).toBe(true)
+			expect(keys.includes('PATH')).toBe(true)
+			expect(keys.includes('HOME')).toBe(true)
+			expect(keys.includes('NODE_PATH')).toBe(true)
+			expect(keys.includes('BUN_INSTALL')).toBe(true)
+			expect(keys.includes('TMPDIR')).toBe(true)
+			expect(keys.includes('AWS_SECRET_ACCESS_KEY')).toBe(false)
+			expect(keys.includes('GITHUB_TOKEN')).toBe(false)
+			expect(invocation.cmd).toEqual(['bun', 'test', '--', 'auth'])
+		} finally {
+			if (previousNodePath === undefined) {
+				delete process.env.NODE_PATH
+			} else {
+				process.env.NODE_PATH = previousNodePath
+			}
+			if (previousBunInstall === undefined) {
+				delete process.env.BUN_INSTALL
+			} else {
+				process.env.BUN_INSTALL = previousBunInstall
+			}
+			if (previousTmpdir === undefined) {
+				delete process.env.TMPDIR
+			} else {
+				process.env.TMPDIR = previousTmpdir
+			}
+		}
+	})
+})
+
 describe('bun tools integration', () => {
+	test('syncs MCP server version with package.json', () => {
+		const packageJson = JSON.parse(
+			readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+		) as { version: string }
+
+		expect(SERVER_VERSION).toBe(packageJson.version)
+	})
+
 	test('exposes all three tools via tools/list', async () => {
-		const server = createBunServer()
+		const server = await createBunServer()
 		const client = new Client({ name: 'bun-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -341,7 +394,7 @@ describe('bun tools integration', () => {
 
 	test('callTool returns structuredContent for runTests', async () => {
 		_resetGitRootCache()
-		const server = createBunServer()
+		const server = await createBunServer()
 		const client = new Client({ name: 'bun-client', version: '0.0.1' })
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
 
@@ -370,6 +423,37 @@ describe('bun tools integration', () => {
 			expect(typeof summary.failed).toBe('number')
 			expect(typeof summary.total).toBe('number')
 			expect(Array.isArray(summary.failures)).toBe(true)
+		} finally {
+			await Promise.all([client.close(), server.close()])
+		}
+	})
+
+	test('callTool returns coverage with structured uncovered entries', async () => {
+		_resetGitRootCache()
+		const server = await createBunServer()
+		const client = new Client({ name: 'bun-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'bun_testCoverage',
+				arguments: { response_format: 'json' },
+			})
+
+			expect(result.structuredContent).toBeDefined()
+			const output = result.structuredContent as {
+				summary: { passed: number; failed: number; total: number }
+				coverage: { percent: number; uncovered: Array<{ file: string; percent: number }> }
+			}
+
+			expect(typeof output.coverage.percent).toBe('number')
+			expect(Array.isArray(output.coverage.uncovered)).toBe(true)
+			for (const entry of output.coverage.uncovered) {
+				expect(typeof entry.file).toBe('string')
+				expect(typeof entry.percent).toBe('number')
+			}
 		} finally {
 			await Promise.all([client.close(), server.close()])
 		}
