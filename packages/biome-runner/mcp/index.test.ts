@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { rm, symlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
@@ -10,6 +10,7 @@ import {
 	createBiomeServer,
 	parseBiomeOutput,
 	SERVER_VERSION,
+	spawnWithTimeout,
 	validatePath,
 	validatePathOrDefault,
 } from './index'
@@ -135,6 +136,18 @@ describe('createBiomeInvocation', () => {
 	})
 })
 
+describe('spawnWithTimeout', () => {
+	test('returns timedOut=true for long-running subprocesses', async () => {
+		const result = await spawnWithTimeout(['bun', '-e', 'setInterval(() => {}, 1000)'], {
+			timeoutMs: 50,
+		})
+
+		expect(result.timedOut).toBe(true)
+		expect(typeof result.stdout).toBe('string')
+		expect(typeof result.stderr).toBe('string')
+	})
+})
+
 describe('biome tools integration', () => {
 	test('syncs MCP server version with package.json', () => {
 		const packageJson = JSON.parse(
@@ -239,6 +252,46 @@ describe('biome tools integration', () => {
 			expect(Array.isArray(output.unformattedFiles)).toBe(true)
 		} finally {
 			await Promise.all([client.close(), server.close()])
+		}
+	})
+
+	test('lintFix returns structuredContent with fixed/remaining fields', async () => {
+		_resetGitRootCache()
+		const fixtureParent = path.join(process.cwd(), 'reports')
+		await mkdir(fixtureParent, { recursive: true })
+		const fixtureDir = await mkdtemp(path.join(fixtureParent, 'biome-lintfix-fixture-'))
+		const fixtureFile = path.join(fixtureDir, 'bad.js')
+		await writeFile(fixtureFile, 'const foo={bar:1}\n')
+		const server = await createBiomeServer()
+		const client = new Client({ name: 'biome-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'biome_lintFix',
+				arguments: {
+					path: fixtureDir,
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(false)
+			expect(result.structuredContent).toBeDefined()
+
+			const output = result.structuredContent as {
+				fixed: number
+				remaining: { errorCount: number; warningCount: number; diagnostics: unknown[] }
+			}
+
+			expect(typeof output.fixed).toBe('number')
+			expect(typeof output.remaining.errorCount).toBe('number')
+			expect(typeof output.remaining.warningCount).toBe('number')
+			expect(Array.isArray(output.remaining.diagnostics)).toBe(true)
+		} finally {
+			await Promise.all([client.close(), server.close()])
+			await rm(fixtureDir, { recursive: true, force: true })
 		}
 	})
 })
