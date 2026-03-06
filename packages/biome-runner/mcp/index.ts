@@ -76,6 +76,8 @@ interface BiomeReport {
 }
 
 const BIOME_TIMEOUT_MS = 30_000
+const BIOME_OUTPUT_CAPTURE_MAX_BYTES = 16 * 1024 * 1024
+const BIOME_MAX_DIAGNOSTICS = 200
 const BIOME_ENV_ALLOWLIST = [
 	'PATH',
 	'HOME',
@@ -379,8 +381,61 @@ export function createBiomeInvocation(args: {
 	if (args.write) {
 		cmd.push('--write')
 	}
-	cmd.push('--reporter=json', args.path)
+	cmd.push(
+		'--reporter=json',
+		`--max-diagnostics=${BIOME_MAX_DIAGNOSTICS}`,
+		args.path,
+	)
 	return { cmd, env }
+}
+
+async function collectStreamText(
+	stream: ReadableStream<Uint8Array> | number | null | undefined,
+	maxBytes: number,
+): Promise<{ text: string; truncated: boolean }> {
+	if (
+		stream === null ||
+		stream === undefined ||
+		typeof stream === 'number' ||
+		typeof (stream as ReadableStream<Uint8Array>).getReader !== 'function'
+	) {
+		return { text: '', truncated: false }
+	}
+
+	const reader = stream.getReader()
+	const decoder = new TextDecoder()
+	let text = ''
+	let capturedBytes = 0
+	let truncated = false
+
+	while (true) {
+		const { done, value } = await reader.read()
+		if (done) break
+		if (!value) continue
+
+		if (truncated) {
+			continue
+		}
+
+		const remaining = maxBytes - capturedBytes
+		if (remaining <= 0) {
+			truncated = true
+			continue
+		}
+
+		if (value.byteLength <= remaining) {
+			text += decoder.decode(value, { stream: true })
+			capturedBytes += value.byteLength
+			continue
+		}
+
+		text += decoder.decode(value.subarray(0, remaining), { stream: true })
+		capturedBytes += remaining
+		truncated = true
+	}
+
+	text += decoder.decode()
+	return { text, truncated }
 }
 
 function createBunStderrWritableStream(): WritableStream {
@@ -546,12 +601,15 @@ export async function spawnWithTimeout(
 		cwd?: string
 		env?: Record<string, string>
 		timeoutMs?: number
+		maxBytes?: number
 	},
 ): Promise<{
 	stdout: string
 	stderr: string
 	exitCode: number
 	timedOut: boolean
+	stdoutTruncated: boolean
+	stderrTruncated: boolean
 }> {
 	const proc = (() => {
 		try {
@@ -582,15 +640,23 @@ export async function spawnWithTimeout(
 		}, 5_000)
 	}, options?.timeoutMs ?? BIOME_TIMEOUT_MS)
 
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
+	const maxBytes = options?.maxBytes ?? BIOME_OUTPUT_CAPTURE_MAX_BYTES
+	const [stdoutResult, stderrResult, exitCode] = await Promise.all([
+		collectStreamText(proc.stdout, maxBytes),
+		collectStreamText(proc.stderr, maxBytes),
 		proc.exited,
 	])
 
 	clearTimeout(timeout)
 	if (killTimer) clearTimeout(killTimer)
-	return { stdout, stderr, exitCode, timedOut }
+	return {
+		stdout: stdoutResult.text,
+		stderr: stderrResult.text,
+		exitCode,
+		timedOut,
+		stdoutTruncated: stdoutResult.truncated,
+		stderrTruncated: stderrResult.truncated,
+	}
 }
 
 async function ensurePathExists(validatedPath: string): Promise<void> {
@@ -625,15 +691,22 @@ async function runBiomeCheck(inputPath = '.'): Promise<LintSummary> {
 		subcommand: 'check',
 		path: inputPath,
 	})
-	const { stdout, stderr, timedOut } = await spawnWithTimeout(invocation.cmd, {
-		env: invocation.env,
-		timeoutMs: BIOME_TIMEOUT_MS,
-	})
+	const { stdout, stderr, timedOut, stdoutTruncated, stderrTruncated } =
+		await spawnWithTimeout(invocation.cmd, {
+			env: invocation.env,
+			timeoutMs: BIOME_TIMEOUT_MS,
+		})
 
 	if (timedOut) {
 		throw new BiomeToolError(
 			'SPAWN_FAILURE',
 			`Biome check timed out after ${BIOME_TIMEOUT_MS / 1000}s`,
+		)
+	}
+	if (stdoutTruncated || stderrTruncated) {
+		throw new BiomeToolError(
+			'SPAWN_FAILURE',
+			`Biome output exceeded ${BIOME_OUTPUT_CAPTURE_MAX_BYTES} bytes. Narrow the path or reduce diagnostics.`,
 		)
 	}
 
@@ -661,6 +734,12 @@ async function runBiomeFix(
 			`Biome check --write timed out after ${BIOME_TIMEOUT_MS / 1000}s`,
 		)
 	}
+	if (fix.stdoutTruncated || fix.stderrTruncated) {
+		throw new BiomeToolError(
+			'SPAWN_FAILURE',
+			`Biome output exceeded ${BIOME_OUTPUT_CAPTURE_MAX_BYTES} bytes during --write. Narrow the path or reduce diagnostics.`,
+		)
+	}
 
 	const remaining = await runBiomeCheck(inputPath)
 
@@ -685,18 +764,22 @@ async function runBiomeFormatCheck(
 		subcommand: 'format',
 		path: inputPath,
 	})
-	const { stdout, exitCode, timedOut } = await spawnWithTimeout(
-		invocation.cmd,
-		{
+	const { stdout, exitCode, timedOut, stdoutTruncated, stderrTruncated } =
+		await spawnWithTimeout(invocation.cmd, {
 			env: invocation.env,
 			timeoutMs: BIOME_TIMEOUT_MS,
-		},
-	)
+		})
 
 	if (timedOut) {
 		throw new BiomeToolError(
 			'SPAWN_FAILURE',
 			`Biome format check timed out after ${BIOME_TIMEOUT_MS / 1000}s`,
+		)
+	}
+	if (stdoutTruncated || stderrTruncated) {
+		throw new BiomeToolError(
+			'SPAWN_FAILURE',
+			`Biome output exceeded ${BIOME_OUTPUT_CAPTURE_MAX_BYTES} bytes during format check. Narrow the path or reduce diagnostics.`,
 		)
 	}
 

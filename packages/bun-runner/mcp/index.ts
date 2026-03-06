@@ -51,6 +51,7 @@ function toStructured(value: object): Record<string, unknown> {
 
 const TEST_TIMEOUT_MS = 30_000
 const COVERAGE_TIMEOUT_MS = 60_000
+const BUN_OUTPUT_CAPTURE_MAX_BYTES = 16 * 1024 * 1024
 const configuredCoverageLowThreshold = Number.parseFloat(
 	process.env.BUN_COVERAGE_LOW_THRESHOLD ?? '50',
 )
@@ -113,6 +114,55 @@ interface ObservabilityState {
 
 interface BunServerOptions {
 	stderrStream?: WritableStream
+}
+
+async function collectStreamText(
+	stream: ReadableStream<Uint8Array> | number | null | undefined,
+	maxBytes: number,
+): Promise<{ text: string; truncated: boolean }> {
+	if (
+		stream === null ||
+		stream === undefined ||
+		typeof stream === 'number' ||
+		typeof (stream as ReadableStream<Uint8Array>).getReader !== 'function'
+	) {
+		return { text: '', truncated: false }
+	}
+
+	const reader = stream.getReader()
+	const decoder = new TextDecoder()
+	let text = ''
+	let capturedBytes = 0
+	let truncated = false
+
+	while (true) {
+		const { done, value } = await reader.read()
+		if (done) break
+		if (!value) continue
+
+		if (truncated) {
+			continue
+		}
+
+		const remaining = maxBytes - capturedBytes
+		if (remaining <= 0) {
+			truncated = true
+			continue
+		}
+
+		if (value.byteLength <= remaining) {
+			text += decoder.decode(value, { stream: true })
+			capturedBytes += value.byteLength
+			continue
+		}
+
+		text += decoder.decode(value.subarray(0, remaining), { stream: true })
+		capturedBytes += remaining
+		truncated = true
+	}
+
+	text += decoder.decode()
+	return { text, truncated }
 }
 
 const failureSchema = z.object({
@@ -533,12 +583,15 @@ export async function spawnWithTimeout(
 	timeoutMs: number,
 	options?: {
 		env?: Record<string, string>
+		maxBytes?: number
 	},
 ): Promise<{
 	stdout: string
 	stderr: string
 	exitCode: number
 	timedOut: boolean
+	stdoutTruncated: boolean
+	stderrTruncated: boolean
 }> {
 	const proc = (() => {
 		try {
@@ -568,15 +621,23 @@ export async function spawnWithTimeout(
 		}, 5_000)
 	}, timeoutMs)
 
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
+	const maxBytes = options?.maxBytes ?? BUN_OUTPUT_CAPTURE_MAX_BYTES
+	const [stdoutResult, stderrResult, exitCode] = await Promise.all([
+		collectStreamText(proc.stdout, maxBytes),
+		collectStreamText(proc.stderr, maxBytes),
 		proc.exited,
 	])
 
 	clearTimeout(timeout)
 	if (killTimer) clearTimeout(killTimer)
-	return { stdout, stderr, exitCode, timedOut }
+	return {
+		stdout: stdoutResult.text,
+		stderr: stderrResult.text,
+		exitCode,
+		timedOut,
+		stdoutTruncated: stdoutResult.truncated,
+		stderrTruncated: stderrResult.truncated,
+	}
 }
 
 /**
@@ -590,16 +651,27 @@ async function runBunTests(
 ): Promise<z.infer<typeof testSummarySchema>> {
 	const invocation = createBunInvocation(pattern)
 
-	const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
-		invocation.cmd,
-		TEST_TIMEOUT_MS,
-		{ env: invocation.env },
-	)
+	const {
+		stdout,
+		stderr,
+		exitCode,
+		timedOut,
+		stdoutTruncated,
+		stderrTruncated,
+	} = await spawnWithTimeout(invocation.cmd, TEST_TIMEOUT_MS, {
+		env: invocation.env,
+	})
 
 	if (timedOut) {
 		throw new BunToolError(
 			'TIMEOUT',
 			`Tests timed out after ${TEST_TIMEOUT_MS / 1000} seconds. Possible causes: open handles, infinite loops, or accidental watch mode.`,
+		)
+	}
+	if (stdoutTruncated || stderrTruncated) {
+		throw new BunToolError(
+			'SPAWN_FAILURE',
+			`bun test output exceeded ${BUN_OUTPUT_CAPTURE_MAX_BYTES} bytes. Narrow test scope or run without heavy verbose output.`,
 		)
 	}
 
@@ -634,16 +706,27 @@ async function runBunTestCoverage(): Promise<
 	z.infer<typeof testCoverageSchema>
 > {
 	const invocation = createBunCoverageInvocation()
-	const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
-		invocation.cmd,
-		COVERAGE_TIMEOUT_MS,
-		{ env: invocation.env },
-	)
+	const {
+		stdout,
+		stderr,
+		exitCode,
+		timedOut,
+		stdoutTruncated,
+		stderrTruncated,
+	} = await spawnWithTimeout(invocation.cmd, COVERAGE_TIMEOUT_MS, {
+		env: invocation.env,
+	})
 
 	if (timedOut) {
 		throw new BunToolError(
 			'TIMEOUT',
 			`Coverage tests timed out after ${COVERAGE_TIMEOUT_MS / 1000} seconds.`,
+		)
+	}
+	if (stdoutTruncated || stderrTruncated) {
+		throw new BunToolError(
+			'SPAWN_FAILURE',
+			`bun test --coverage output exceeded ${BUN_OUTPUT_CAPTURE_MAX_BYTES} bytes. Narrow test scope or disable excessive logging.`,
 		)
 	}
 
