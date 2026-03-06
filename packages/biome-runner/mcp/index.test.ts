@@ -114,6 +114,7 @@ describe('createBiomeInvocation', () => {
 				'check',
 				'--write',
 				'--reporter=json',
+				'--max-diagnostics=200',
 				'packages/biome-runner',
 			])
 		} finally {
@@ -145,6 +146,17 @@ describe('spawnWithTimeout', () => {
 		expect(result.timedOut).toBe(true)
 		expect(typeof result.stdout).toBe('string')
 		expect(typeof result.stderr).toBe('string')
+	})
+
+	test('truncates oversized stdout when maxBytes is exceeded', async () => {
+		const result = await spawnWithTimeout(['bun', '-e', 'console.log("x".repeat(10_000))'], {
+			maxBytes: 128,
+			timeoutMs: 5_000,
+		})
+
+		expect(result.timedOut).toBe(false)
+		expect(result.stdoutTruncated).toBe(true)
+		expect(result.stdout.length).toBeLessThanOrEqual(128)
 	})
 })
 

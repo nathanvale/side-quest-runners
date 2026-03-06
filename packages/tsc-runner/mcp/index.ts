@@ -48,6 +48,7 @@ function toStructured(value: object): Record<string, unknown> {
 /** Valid TypeScript configuration file names */
 const TSC_CONFIG_FILES = ['tsconfig.json', 'jsconfig.json'] as const
 const TSC_TIMEOUT_MS = 30_000
+const TSC_OUTPUT_CAPTURE_MAX_BYTES = 16 * 1024 * 1024
 const TSC_ENV_ALLOWLIST = [
 	'PATH',
 	'HOME',
@@ -62,6 +63,55 @@ const TOOL_ERROR_CODES = [
 	'SPAWN_FAILURE',
 	'PATH_NOT_FOUND',
 ] as const
+
+async function collectStreamText(
+	stream: ReadableStream<Uint8Array> | number | null | undefined,
+	maxBytes: number,
+): Promise<{ text: string; truncated: boolean }> {
+	if (
+		stream === null ||
+		stream === undefined ||
+		typeof stream === 'number' ||
+		typeof (stream as ReadableStream<Uint8Array>).getReader !== 'function'
+	) {
+		return { text: '', truncated: false }
+	}
+
+	const reader = stream.getReader()
+	const decoder = new TextDecoder()
+	let text = ''
+	let capturedBytes = 0
+	let truncated = false
+
+	while (true) {
+		const { done, value } = await reader.read()
+		if (done) break
+		if (!value) continue
+
+		if (truncated) {
+			continue
+		}
+
+		const remaining = maxBytes - capturedBytes
+		if (remaining <= 0) {
+			truncated = true
+			continue
+		}
+
+		if (value.byteLength <= remaining) {
+			text += decoder.decode(value, { stream: true })
+			capturedBytes += value.byteLength
+			continue
+		}
+
+		text += decoder.decode(value.subarray(0, remaining), { stream: true })
+		capturedBytes += remaining
+		truncated = true
+	}
+
+	text += decoder.decode()
+	return { text, truncated }
+}
 
 type ToolErrorCode = (typeof TOOL_ERROR_CODES)[number]
 const DEFAULT_MCP_LOG_LEVEL: LoggingLevel = 'warning'
@@ -433,12 +483,15 @@ async function spawnWithTimeout(
 	options?: {
 		cwd?: string
 		env?: Record<string, string>
+		maxBytes?: number
 	},
 ): Promise<{
 	stdout: string
 	stderr: string
 	exitCode: number
 	timedOut: boolean
+	stdoutTruncated: boolean
+	stderrTruncated: boolean
 }> {
 	const proc = (() => {
 		try {
@@ -469,33 +522,50 @@ async function spawnWithTimeout(
 		}, 5_000)
 	}, timeoutMs)
 
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
+	const maxBytes = options?.maxBytes ?? TSC_OUTPUT_CAPTURE_MAX_BYTES
+	const [stdoutResult, stderrResult, exitCode] = await Promise.all([
+		collectStreamText(proc.stdout, maxBytes),
+		collectStreamText(proc.stderr, maxBytes),
 		proc.exited,
 	])
 
 	clearTimeout(timeout)
 	if (killTimer) clearTimeout(killTimer)
-	return { stdout, stderr, exitCode, timedOut }
+	return {
+		stdout: stdoutResult.text,
+		stderr: stderrResult.text,
+		exitCode,
+		timedOut,
+		stdoutTruncated: stdoutResult.truncated,
+		stderrTruncated: stderrResult.truncated,
+	}
 }
 
 async function runTsc(cwd: string, configPath: string): Promise<TscOutput> {
 	const invocation = createTscInvocation(configPath)
 
-	const { stdout, stderr, exitCode, timedOut } = await spawnWithTimeout(
-		invocation.cmd,
-		TSC_TIMEOUT_MS,
-		{
-			cwd,
-			env: invocation.env,
-		},
-	)
+	const {
+		stdout,
+		stderr,
+		exitCode,
+		timedOut,
+		stdoutTruncated,
+		stderrTruncated,
+	} = await spawnWithTimeout(invocation.cmd, TSC_TIMEOUT_MS, {
+		cwd,
+		env: invocation.env,
+	})
 
 	if (timedOut) {
 		throw new TscToolError(
 			'TIMEOUT',
 			`TypeScript check timed out after ${TSC_TIMEOUT_MS / 1000}s in ${cwd}.`,
+		)
+	}
+	if (stdoutTruncated || stderrTruncated) {
+		throw new TscToolError(
+			'SPAWN_FAILURE',
+			`TypeScript output exceeded ${TSC_OUTPUT_CAPTURE_MAX_BYTES} bytes in ${cwd}. Narrow scope or reduce compiler verbosity.`,
 		)
 	}
 
