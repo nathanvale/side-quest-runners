@@ -1,5 +1,18 @@
 # @side-quest/tsc-runner
 
+## 1.0.4
+
+### Patch Changes
+
+- [#43](https://github.com/nathanvale/side-quest-runners/pull/43) [`29caf03`](https://github.com/nathanvale/side-quest-runners/commit/29caf034f407808f604e4e68b85519c973d436bc) Thanks [@nathanvale](https://github.com/nathanvale)! - Harden subprocess output handling to prevent out-of-memory failures on large command output.
+
+  - Replace unbounded `Response(...).text()` reads with bounded stream collectors in all runners.
+  - Add explicit truncation detection and safe `SPAWN_FAILURE` errors when output exceeds capture limits.
+  - Add truncation regression tests for biome-runner and bun-runner spawn helpers.
+  - Add Biome-side output reduction with `--max-diagnostics=200` to reduce reporter JSON volume at source.
+
+  This fixes the OOM failure mode reported in issue #42 and applies the same guardrail pattern consistently across biome, bun, and tsc runners.
+
 ## 1.0.3
 
 ### Patch Changes
