@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { createEmptyHookOutput } from './claude-schema'
+import { emitMetric, setupObservability } from './observability'
 import { handlePostToolUse } from './posttool'
 import { handlePostToolUseFailure } from './posttool-failure'
 import { handlePreToolUse } from './pretool'
@@ -51,13 +52,22 @@ export function createHookHandler(deps?: Partial<HookHandlerDependencies>) {
  * Execute CLI command with stdout-safety fallback on all unexpected errors.
  */
 export async function runCli(argv: string[]): Promise<void> {
+	const startedAtMs = Date.now()
 	const command = parseCommand(argv)
 	const handler = createHookHandler()
 	try {
-		await handler(command)
+		await setupObservability()
+		emitMetric('hook.events.total', { command })
+		const output = await handler(command)
+		recordOutputMetrics(command, output)
 	} catch (error) {
 		process.stderr.write(`sq-claude-hook error: ${String(error)}\n`)
 		writeFailsafeJson(commandToEventName(command))
+	} finally {
+		emitMetric('hook.latency.totalMs', {
+			command,
+			totalMs: Date.now() - startedAtMs,
+		})
 	}
 }
 
@@ -120,4 +130,26 @@ function commandToEventName(
 
 if (import.meta.main) {
 	await runCli(process.argv)
+}
+
+function recordOutputMetrics(command: HookCommand, output: HookOutput): void {
+	const additionalContext = output.hookSpecificOutput?.additionalContext
+	if (
+		typeof additionalContext !== 'string' ||
+		additionalContext.trim() === ''
+	) {
+		return
+	}
+
+	if (additionalContext.startsWith('Dedup hit:')) {
+		emitMetric('hook.dedup.hit', { command })
+		emitMetric('hook.output.pointer', { command })
+		return
+	}
+
+	emitMetric('hook.dedup.miss', { command })
+	emitMetric('hook.output.fallback', { command })
+	if (command === 'posttool-failure') {
+		emitMetric('hook.dedup.failureNotSuppressed', { command })
+	}
 }

@@ -13,7 +13,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 interface RunnerCase {
-	name: 'tsc-runner' | 'bun-runner' | 'biome-runner'
+	name: 'tsc-runner' | 'bun-runner' | 'biome-runner' | 'claude-hooks'
 	entrypoint: string
 	run(sandboxRoot: string): Promise<void>
 }
@@ -352,6 +352,54 @@ async function runBiomeSmoke(sandboxRoot: string): Promise<void> {
 	})
 }
 
+async function runClaudeHooksSmoke(sandboxRoot: string): Promise<void> {
+	const cacheRoot = path.join(sandboxRoot, 'hooks-cache')
+	await mkdir(cacheRoot, { recursive: true })
+	const hookInput = {
+		hook_event_name: 'PostToolUse',
+		cwd: process.cwd(),
+		tool_name: 'mcp__tsc-runner__tsc_check',
+		tool_use_id: 'toolu_smoke_123',
+		tool_input: { path: '.' },
+		tool_response: {
+			errorCount: 0,
+			errors: [],
+		},
+	}
+
+	const escapedPayload = JSON.stringify(hookInput).replaceAll("'", "'\"'\"'")
+	const command = [
+		`printf '%s\\n' '${escapedPayload}'`,
+		`bun ${path.join(REPO_ROOT, 'packages/claude-hooks/hooks/index.ts')} posttool`,
+	].join(' | ')
+
+	const proc = Bun.spawn(['bash', '-lc', command], {
+		stdout: 'pipe',
+		stderr: 'pipe',
+		env: {
+			...process.env,
+			SQ_HOOK_DEDUP_ENABLED: '1',
+			TMPDIR: cacheRoot,
+		},
+	})
+
+	const [exitCode, stdout, stderr] = await Promise.all([
+		proc.exited,
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+	])
+
+	assert(exitCode === 0, `claude-hooks exited with ${exitCode}: ${stderr}`)
+	const parsed = JSON.parse(stdout)
+	assertObject(parsed, 'claude-hooks stdout payload')
+	const hookSpecificOutput = parsed.hookSpecificOutput
+	assertObject(hookSpecificOutput, 'claude-hooks hookSpecificOutput')
+	assert(
+		hookSpecificOutput.hookEventName === 'PostToolUse',
+		'claude-hooks expected PostToolUse hookEventName',
+	)
+}
+
 async function run(): Promise<void> {
 	const keepSandboxes = process.env.SMOKE_KEEP_SANDBOXES === '1'
 	const sandboxRoot = await createSandboxRoot('side-quest-runners-smoke')
@@ -371,6 +419,11 @@ async function run(): Promise<void> {
 			name: 'biome-runner',
 			entrypoint: path.join(REPO_ROOT, 'packages/biome-runner/mcp/index.ts'),
 			run: runBiomeSmoke,
+		},
+		{
+			name: 'claude-hooks',
+			entrypoint: path.join(REPO_ROOT, 'packages/claude-hooks/hooks/index.ts'),
+			run: runClaudeHooksSmoke,
 		},
 	]
 

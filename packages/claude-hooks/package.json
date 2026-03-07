@@ -50,6 +50,7 @@
 		"build": "bunx bunup",
 		"clean": "rimraf dist 2>/dev/null || true",
 		"test": "bun test",
+		"test:smoke": "bun ../../scripts/smoke/run-smoke.ts",
 		"test:ci": "TF_BUILD=true bun test",
 		"typecheck": "tsc --noEmit"
 	},

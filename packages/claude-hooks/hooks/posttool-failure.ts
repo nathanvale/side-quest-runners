@@ -7,6 +7,7 @@ import {
 	withUpdatedRecord,
 	writeDedupState,
 } from './dedup-store'
+import { emitMetric } from './observability'
 import type { HookOutput } from './types'
 
 /**
@@ -21,42 +22,51 @@ export function handlePostToolUseFailure(
 	if (!intent) {
 		return createContextOutput('PostToolUseFailure')
 	}
-	const state = readDedupState({
-		projectRoot: intent.projectRoot,
-		nowMs,
-		ttlMs,
-	})
-	const existing = state.entries[intent.dedupKeyId]
-	const decision = decideDedupAction({
-		eventName: 'PostToolUseFailure',
-		runnerKind: intent.runnerKind,
-		operation: intent.operation,
-		dedupKeyId: intent.dedupKeyId,
-		nowMs,
-		ttlMs,
-		existingRecord: existing,
-		fallbackSummary: {
-			message: `Hook failure: ${intent.runnerKind}/${intent.operation} emitted a failure event.`,
-		},
-	})
-
-	const nextState = withUpdatedRecord(state, intent.dedupKeyId, {
-		createdAtMs: nowMs,
-		hookSeen: true,
-		mcpSeen: existing?.mcpSeen ?? false,
-		mcpWasError: existing?.mcpWasError ?? false,
-	})
-	writeDedupState(
-		{
+	const fallbackMessage = `Hook failure: ${intent.runnerKind}/${intent.operation} emitted a failure event.`
+	try {
+		const state = readDedupState({
 			projectRoot: intent.projectRoot,
 			nowMs,
 			ttlMs,
-		},
-		nextState,
-	)
+		})
+		const existing = state.entries[intent.dedupKeyId]
+		const decision = decideDedupAction({
+			eventName: 'PostToolUseFailure',
+			runnerKind: intent.runnerKind,
+			operation: intent.operation,
+			dedupKeyId: intent.dedupKeyId,
+			nowMs,
+			ttlMs,
+			existingRecord: existing,
+			fallbackSummary: {
+				message: fallbackMessage,
+			},
+		})
 
-	if (decision.action === 'pointer') {
-		return createContextOutput('PostToolUseFailure', decision.message)
+		const nextState = withUpdatedRecord(state, intent.dedupKeyId, {
+			createdAtMs: nowMs,
+			hookSeen: true,
+			mcpSeen: existing?.mcpSeen ?? false,
+			mcpWasError: existing?.mcpWasError ?? false,
+		})
+		writeDedupState(
+			{
+				projectRoot: intent.projectRoot,
+				nowMs,
+				ttlMs,
+			},
+			nextState,
+		)
+
+		if (decision.action === 'pointer') {
+			return createContextOutput('PostToolUseFailure', decision.message)
+		}
+		return createContextOutput('PostToolUseFailure', decision.summary.message)
+	} catch (error) {
+		emitMetric('hook.cache.writeError', {
+			event: 'PostToolUseFailure',
+			error: error instanceof Error ? error.message : String(error),
+		})
+		return createContextOutput('PostToolUseFailure', fallbackMessage)
 	}
-	return createContextOutput('PostToolUseFailure', decision.summary.message)
 }

@@ -7,6 +7,7 @@ import {
 	withUpdatedRecord,
 	writeDedupState,
 } from './dedup-store'
+import { emitMetric } from './observability'
 import type { HookOutput } from './types'
 
 /**
@@ -29,44 +30,51 @@ export function handlePostToolUse(
 			intent.toolResponse,
 		),
 	}
-
-	const state = readDedupState({
-		projectRoot: intent.projectRoot,
-		nowMs,
-		ttlMs,
-	})
-	const existing = state.entries[intent.dedupKeyId]
-	const decision = decideDedupAction({
-		eventName: 'PostToolUse',
-		runnerKind: intent.runnerKind,
-		operation: intent.operation,
-		dedupKeyId: intent.dedupKeyId,
-		nowMs,
-		ttlMs,
-		existingRecord: existing,
-		fallbackSummary,
-	})
-
-	const nextRecord = {
-		createdAtMs: nowMs,
-		hookSeen: true,
-		mcpSeen: true,
-		mcpWasError: readMcpErrorFlag(intent.toolResponse),
-	}
-	const nextState = withUpdatedRecord(state, intent.dedupKeyId, nextRecord)
-	writeDedupState(
-		{
+	try {
+		const state = readDedupState({
 			projectRoot: intent.projectRoot,
 			nowMs,
 			ttlMs,
-		},
-		nextState,
-	)
+		})
+		const existing = state.entries[intent.dedupKeyId]
+		const decision = decideDedupAction({
+			eventName: 'PostToolUse',
+			runnerKind: intent.runnerKind,
+			operation: intent.operation,
+			dedupKeyId: intent.dedupKeyId,
+			nowMs,
+			ttlMs,
+			existingRecord: existing,
+			fallbackSummary,
+		})
 
-	if (decision.action === 'pointer') {
-		return createContextOutput('PostToolUse', decision.message)
+		const nextRecord = {
+			createdAtMs: nowMs,
+			hookSeen: true,
+			mcpSeen: true,
+			mcpWasError: readMcpErrorFlag(intent.toolResponse),
+		}
+		const nextState = withUpdatedRecord(state, intent.dedupKeyId, nextRecord)
+		writeDedupState(
+			{
+				projectRoot: intent.projectRoot,
+				nowMs,
+				ttlMs,
+			},
+			nextState,
+		)
+
+		if (decision.action === 'pointer') {
+			return createContextOutput('PostToolUse', decision.message)
+		}
+		return createContextOutput('PostToolUse', decision.summary.message)
+	} catch (error) {
+		emitMetric('hook.cache.writeError', {
+			event: 'PostToolUse',
+			error: error instanceof Error ? error.message : String(error),
+		})
+		return createContextOutput('PostToolUse', fallbackSummary.message)
 	}
-	return createContextOutput('PostToolUse', decision.summary.message)
 }
 
 function buildFallbackSummary(
