@@ -4,9 +4,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import {
 	_resetGitRootCache,
+	compactSummaryForJsonText,
 	createBunCoverageInvocation,
 	createBunInvocation,
 	createBunServer,
+	extractTopStackFrame,
 	SERVER_VERSION,
 	spawnWithTimeout,
 	validatePath,
@@ -289,6 +291,56 @@ Ran 3387 tests across 150 files. [25.00s]`
 		expect(result.passed).toBe(3387)
 		expect(result.failed).toBe(0)
 		expect(result.failures).toHaveLength(0)
+	})
+})
+
+describe('token-efficiency helpers', () => {
+	test('extractTopStackFrame returns first stack frame line', () => {
+		const top = extractTopStackFrame(
+			'Error: boom\n    at alpha (/tmp/a.ts:10:3)\n    at beta (/tmp/b.ts:20:5)',
+		)
+		expect(top).toBe('at alpha (/tmp/a.ts:10:3)')
+	})
+
+	test('compactSummaryForJsonText deduplicates common file path', () => {
+		const compact = compactSummaryForJsonText({
+			passed: 1,
+			failed: 2,
+			total: 3,
+			failures: [
+				{
+					file: '/tmp/fail.test.ts',
+					message: 'first failure',
+					line: 10,
+					stack: null,
+				},
+				{
+					file: '/tmp/fail.test.ts',
+					message: 'second failure',
+					line: 20,
+					stack: null,
+				},
+			],
+		})
+
+		expect(compact).toMatchInlineSnapshot(`
+			{
+			  "commonFile": "/tmp/fail.test.ts",
+			  "failed": 2,
+			  "failures": [
+			    {
+			      "line": 10,
+			      "message": "first failure",
+			    },
+			    {
+			      "line": 20,
+			      "message": "second failure",
+			    },
+			  ],
+			  "passed": 1,
+			  "total": 3,
+			}
+		`)
 	})
 })
 

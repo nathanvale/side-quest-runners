@@ -168,8 +168,8 @@ async function collectStreamText(
 const failureSchema = z.object({
 	file: z.string(),
 	message: z.string(),
-	line: z.number().nullable(),
-	stack: z.string().nullable(),
+	line: z.number().optional().nullable(),
+	stack: z.string().optional().nullable(),
 })
 
 const testSummarySchema = z.object({
@@ -373,6 +373,27 @@ function normalizeSummary(
 	}
 }
 
+function stripNullishDeep<T>(value: T): T {
+	if (value === null || value === undefined) {
+		return value
+	}
+	if (Array.isArray(value)) {
+		return value.map((entry) => stripNullishDeep(entry)) as T
+	}
+	if (typeof value !== 'object') {
+		return value
+	}
+	const source = value as Record<string, unknown>
+	const result: Record<string, unknown> = {}
+	for (const [key, entry] of Object.entries(source)) {
+		if (entry === null || entry === undefined) {
+			continue
+		}
+		result[key] = stripNullishDeep(entry)
+	}
+	return result as T
+}
+
 /**
  * Build Bun invocation command and sanitized environment.
  *
@@ -561,7 +582,7 @@ function createToolSuccess(text: string, structured: object): CallToolResult {
 	return {
 		isError: false,
 		content: [{ type: 'text', text }],
-		structuredContent: toStructured(structured),
+		structuredContent: toStructured(stripNullishDeep(structured)),
 	}
 }
 
@@ -767,7 +788,7 @@ function formatTestSummary(
 	context?: string,
 ): string {
 	if (format === 'json') {
-		return JSON.stringify(summary)
+		return JSON.stringify(compactSummaryForJsonText(summary))
 	}
 
 	if (summary.failed === 0) {
@@ -777,23 +798,69 @@ function formatTestSummary(
 	}
 
 	let output = `${summary.failed} tests failed${context ? ` in ${context}` : ''} (${summary.passed} passed)\n\n`
+	const commonFile = getCommonFailureFile(summary.failures)
+	if (commonFile) {
+		output += `File: ${commonFile}\n\n`
+	}
 	for (let index = 0; index < summary.failures.length; index += 1) {
 		const failure = summary.failures[index]
 		if (!failure) {
 			continue
 		}
-		output += `${index + 1}. ${failure.file}:${failure.line ?? '?'}\n`
+		const locationPrefix = commonFile ? '' : `${failure.file}:`
+		output += `${index + 1}. ${locationPrefix}${failure.line ?? '?'}\n`
 		output += `   ${failure.message.split('\n')[0]}\n`
 		if (failure.stack) {
-			output += `${failure.stack
-				.split('\n')
-				.map((line) => `      ${line}`)
-				.join('\n')}\n`
+			output += `      ${extractTopStackFrame(failure.stack)}\n`
 		}
 		output += '\n'
 	}
 
 	return output.trim()
+}
+
+function getCommonFailureFile(
+	failures: z.infer<typeof failureSchema>[],
+): string | null {
+	if (failures.length === 0) {
+		return null
+	}
+	const firstFile = failures[0]?.file
+	if (!firstFile) {
+		return null
+	}
+	return failures.every((failure) => failure.file === firstFile)
+		? firstFile
+		: null
+}
+
+export function extractTopStackFrame(stack: string): string {
+	const lines = stack
+		.split('\n')
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0)
+	const topFrame = lines.find((line) => line.startsWith('at '))
+	return topFrame ?? lines[0] ?? stack
+}
+
+export function compactSummaryForJsonText(
+	summary: z.infer<typeof testSummarySchema>,
+): Record<string, unknown> {
+	const commonFile = getCommonFailureFile(summary.failures)
+	if (!commonFile) {
+		return stripNullishDeep(summary)
+	}
+	return stripNullishDeep({
+		passed: summary.passed,
+		failed: summary.failed,
+		total: summary.total,
+		commonFile,
+		failures: summary.failures.map((failure) => ({
+			line: failure.line,
+			message: failure.message,
+			stack: failure.stack,
+		})),
+	})
 }
 
 function formatCoverageResult(
