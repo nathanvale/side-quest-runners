@@ -8,5 +8,5 @@
 		"**/*.spec.ts",
 		"**/__tests__/**"
 	],
-	"include": ["packages/*/mcp/**/*.ts"]
+	"include": ["packages/*/mcp/**/*.ts", "packages/*/hooks/**/*.ts"]
 }
