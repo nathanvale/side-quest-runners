@@ -1,5 +1,5 @@
 ---
-status: pending
+status: complete
 priority: p2
 issue_id: "024"
 tags: [code-review, observability, hooks, reliability]
@@ -70,9 +70,9 @@ dependencies: []
 
 ## Acceptance Criteria
 
-- [ ] Successful hook run emits `hook.events.total` and `hook.latency.totalMs` on stderr
-- [ ] No non-JSON output appears on stdout
-- [ ] Existing tests pass and smoke still succeeds
+- [x] Successful hook run emits `hook.events.total` and `hook.latency.totalMs` on stderr
+- [x] No non-JSON output appears on stdout
+- [x] Existing tests pass and smoke still succeeds
 
 ## Work Log
 
@@ -88,5 +88,16 @@ dependencies: []
 **Learnings:**
 - Buffered sink policy can silently suppress expected telemetry in short-lived CLIs
 
-## Notes
+### 2026-03-07 - Resolved
 
+**By:** Claude Code
+
+**Actions:**
+- Added `stderrDirect` sink (plain `getStreamSink`, no `fingersCrossed` wrapper) in `observability.ts`
+- Added logger entry for `['side-quest', 'hooks', 'metrics']` routing to `stderrDirect` at `info` level
+- Placed metrics logger before the broader `['side-quest', 'hooks']` entry so LogTape matches the more-specific category first
+- All 17 existing tests pass
+
+**Learnings:**
+- LogTape matches loggers by most-specific category first, so ordering matters
+- `fingersCrossed` sinks are inappropriate for metrics in short-lived CLI processes

@@ -53,19 +53,20 @@ export function createHookHandler(deps?: Partial<HookHandlerDependencies>) {
  */
 export async function runCli(argv: string[]): Promise<void> {
 	const startedAtMs = Date.now()
-	const command = parseCommand(argv)
-	const handler = createHookHandler()
+	let command: HookCommand | undefined
 	try {
+		command = parseCommand(argv)
+		const handler = createHookHandler()
 		await setupObservability()
 		emitMetric('hook.events.total', { command })
 		const output = await handler(command)
 		recordOutputMetrics(command, output)
 	} catch (error) {
 		process.stderr.write(`sq-claude-hook error: ${String(error)}\n`)
-		writeFailsafeJson(commandToEventName(command))
+		writeFailsafeJson(command ? commandToEventName(command) : 'PostToolUse')
 	} finally {
 		emitMetric('hook.latency.totalMs', {
-			command,
+			command: command ?? 'unknown',
 			totalMs: Date.now() - startedAtMs,
 		})
 	}

@@ -31,8 +31,16 @@ export function setupObservability(): Promise<void> {
 					isolateByCategory: 'descendant',
 				},
 			),
+			stderrDirect: getStreamSink(createBunStderrWritableStream(), {
+				formatter: jsonLinesFormatter,
+			}),
 		},
 		loggers: [
+			{
+				category: ['side-quest', 'hooks', 'metrics'],
+				sinks: ['stderrDirect'],
+				lowestLevel: 'info',
+			},
 			{
 				category: ['side-quest', 'hooks'],
 				sinks: ['stderrBuffered'],

@@ -1,5 +1,5 @@
 ---
-status: pending
+status: complete
 priority: p2
 issue_id: "025"
 tags: [code-review, hooks, reliability, stdout-contract]
@@ -68,9 +68,9 @@ The hook CLI parses subcommands before entering the `try/catch` failsafe boundar
 
 ## Acceptance Criteria
 
-- [ ] Invalid subcommand path still emits valid JSON on stdout
-- [ ] Invalid subcommand does not print non-JSON content to stdout
-- [ ] Valid subcommands continue to behave unchanged
+- [x] Invalid subcommand path still emits valid JSON on stdout
+- [x] Invalid subcommand does not print non-JSON content to stdout
+- [x] Valid subcommands continue to behave unchanged
 
 ## Work Log
 
@@ -86,5 +86,17 @@ The hook CLI parses subcommands before entering the `try/catch` failsafe boundar
 **Learnings:**
 - Safety boundaries should include argument parsing, not only handler execution
 
-## Notes
+### 2026-03-07 - Resolved
 
+**By:** Claude Code
+
+**Actions:**
+- Moved `parseCommand(argv)` and `createHookHandler()` inside the `try` block in `runCli()`
+- Declared `command` as `let command: HookCommand | undefined` before `try`
+- Catch block now uses `command ? commandToEventName(command) : 'PostToolUse'` for failsafe JSON
+- Finally block uses `command ?? 'unknown'` for latency metrics
+- All 17 existing tests pass, type check clean
+
+**Learnings:**
+- Safety boundaries should include argument parsing, not only handler execution
+- Default to `'PostToolUse'` as the safest fallback event name when command is unknown
