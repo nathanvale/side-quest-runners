@@ -1,5 +1,5 @@
 ---
-status: completed
+status: complete
 priority: p2
 issue_id: "023"
 tags: [token-efficiency, toon, json, mcp, structured-content, hooks, dx]

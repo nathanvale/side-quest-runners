@@ -1,7 +1,6 @@
 import { mapClaudeEventToDedupIntent } from './claude-mapper'
 import { createContextOutput } from './claude-response'
 import type { ClaudeHookInput } from './claude-schema'
-import { decideDedupAction } from './dedup-policy'
 import {
 	readDedupState,
 	withUpdatedRecord,
@@ -12,6 +11,14 @@ import type { HookOutput } from './types'
 
 /**
  * Handle `PostToolUse` dedup behavior for supported runner tools.
+ *
+ * PostToolUse always runs AFTER the MCP tool has returned its result,
+ * so the MCP output is already present in Claude's context. For mapped
+ * (recognized) tools with a `tool_response`, we always emit a pointer
+ * saying "see the MCP output above" rather than repeating a summary.
+ *
+ * The dedup record is still written so that future `PostToolUseFailure`
+ * events can detect divergence (MCP succeeded but Claude marked failure).
  */
 export function handlePostToolUse(
 	input: ClaudeHookInput,
@@ -23,31 +30,15 @@ export function handlePostToolUse(
 		return createContextOutput('PostToolUse')
 	}
 
-	const fallbackSummary = {
-		message: buildFallbackSummary(
-			intent.runnerKind,
-			intent.operation,
-			intent.toolResponse,
-		),
-	}
+	const hasToolResponse = intent.toolResponse !== undefined
+
 	try {
+		// Always write the dedup record for future PostToolUseFailure lookups
 		const state = readDedupState({
 			projectRoot: intent.projectRoot,
 			nowMs,
 			ttlMs,
 		})
-		const existing = state.entries[intent.dedupKeyId]
-		const decision = decideDedupAction({
-			eventName: 'PostToolUse',
-			runnerKind: intent.runnerKind,
-			operation: intent.operation,
-			dedupKeyId: intent.dedupKeyId,
-			nowMs,
-			ttlMs,
-			existingRecord: existing,
-			fallbackSummary,
-		})
-
 		const nextRecord = {
 			createdAtMs: nowMs,
 			hookSeen: true,
@@ -64,16 +55,30 @@ export function handlePostToolUse(
 			nextState,
 		)
 
-		if (decision.action === 'pointer') {
-			return createContextOutput('PostToolUse', decision.message)
+		// Mapped tool with response: always pointer (MCP output is above)
+		if (hasToolResponse) {
+			const pointerMessage = `Dedup hit: ${intent.runnerKind}/${intent.operation} key=${intent.dedupKeyId.slice(0, 12)}. Use MCP output above.`
+			return createContextOutput('PostToolUse', pointerMessage)
 		}
-		return createContextOutput('PostToolUse', decision.summary.message)
+
+		// Mapped tool without response: fallback summary
+		const fallbackMessage = buildFallbackSummary(
+			intent.runnerKind,
+			intent.operation,
+			intent.toolResponse,
+		)
+		return createContextOutput('PostToolUse', fallbackMessage)
 	} catch (error) {
 		emitMetric('hook.cache.writeError', {
 			event: 'PostToolUse',
 			error: error instanceof Error ? error.message : String(error),
 		})
-		return createContextOutput('PostToolUse', fallbackSummary.message)
+		const fallbackMessage = buildFallbackSummary(
+			intent.runnerKind,
+			intent.operation,
+			intent.toolResponse,
+		)
+		return createContextOutput('PostToolUse', fallbackMessage)
 	}
 }
 
