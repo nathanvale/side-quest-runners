@@ -8,6 +8,8 @@ on:
     paths:
       - 'package.json'
       - 'packages/*/mcp/**'
+      - 'packages/*/hooks/**'
+      - 'packages/*/package.json'
       - 'packages/*/bunup.config.ts'
       - 'tsconfig.*'
       - '.github/workflows/package-hygiene.yml'
