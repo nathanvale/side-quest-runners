@@ -11,6 +11,15 @@ describe('parseClaudeHookInput', () => {
 		})
 		expect(parsed.tool_name).toBe('mcp__bun-runner__bun_runTests')
 	})
+
+	test('strips unknown fields after parsing', () => {
+		const parsed = parseClaudeHookInput({
+			hook_event_name: 'PostToolUse',
+			tool_name: 'mcp__bun-runner__bun_runTests',
+			unexpected: 'drop-me',
+		})
+		expect('unexpected' in parsed).toBe(false)
+	})
 })
 
 describe('validateHookOutput', () => {
@@ -30,5 +39,15 @@ describe('validateHookOutput', () => {
 				decision: 'allow',
 			} as unknown as Parameters<typeof validateHookOutput>[0]),
 		).toThrow()
+	})
+
+	test('rejects hookSpecificOutput without hookEventName', () => {
+		expect(() =>
+			validateHookOutput({
+				hookSpecificOutput: {
+					additionalContext: 'missing event name',
+				},
+			}),
+		).toThrow('hookSpecificOutput requires hookEventName')
 	})
 })

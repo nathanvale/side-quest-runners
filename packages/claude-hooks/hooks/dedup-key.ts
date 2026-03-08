@@ -27,12 +27,17 @@ export function normalizeTarget(toolInput: unknown): string {
 				? input.file
 				: typeof input.pattern === 'string'
 					? input.pattern
-					: '.'
-	const compact = candidate.trim() === '' ? '.' : candidate.trim()
-	if (!/^[a-zA-Z0-9._/\-:* ]+$/.test(compact)) {
-		return '.'
+					: undefined
+	const compact = candidate?.trim() ?? ''
+	if (compact !== '') {
+		if (hasUnsafeControlCharacters(compact)) {
+			return buildInputFallbackKey(compact)
+		}
+		return normalizePathLikeTarget(compact)
 	}
-	return path.posix.normalize(compact.replaceAll('\\', '/'))
+
+	const serialized = stableSerialize(toolInput)
+	return serialized === '{}' ? '.' : buildInputFallbackKey(serialized)
 }
 
 /**
@@ -50,4 +55,42 @@ export function buildDedupKey(parts: DedupKeyParts): DedupKey {
  */
 export function hashDedupKey(key: DedupKey): string {
 	return createHash('sha256').update(key).digest('hex')
+}
+
+function normalizePathLikeTarget(value: string): string {
+	const normalized = path.posix.normalize(value.replaceAll('\\', '/'))
+	return normalized.trim() === '' ? '.' : normalized
+}
+
+function hasUnsafeControlCharacters(value: string): boolean {
+	for (let index = 0; index < value.length; index += 1) {
+		const code = value.charCodeAt(index)
+		if (code <= 0x1f || code === 0x7f) {
+			return true
+		}
+	}
+	return false
+}
+
+function buildInputFallbackKey(value: string): string {
+	return `input:${createHash('sha256').update(value).digest('hex').slice(0, 16)}`
+}
+
+function stableSerialize(value: unknown): string {
+	return JSON.stringify(sortJson(value))
+}
+
+function sortJson(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map((entry) => sortJson(entry))
+	}
+	if (typeof value !== 'object' || value === null) {
+		return value
+	}
+	const source = value as Record<string, unknown>
+	return Object.fromEntries(
+		Object.keys(source)
+			.sort()
+			.map((key) => [key, sortJson(source[key])]),
+	)
 }

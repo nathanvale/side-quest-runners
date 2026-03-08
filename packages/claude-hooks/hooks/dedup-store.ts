@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import {
 	chmodSync,
 	existsSync,
@@ -12,6 +12,7 @@ import {
 import os from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
+import { emitMetric } from './observability'
 import type { DedupRecord } from './types'
 
 const DEFAULT_MAX_ENTRIES = 2_000
@@ -45,6 +46,8 @@ export interface DedupStoreOptions {
 	maxEntries?: number
 }
 
+class DedupStoreSecurityError extends Error {}
+
 /**
  * Resolve cache file path for the current project root.
  */
@@ -58,7 +61,7 @@ export function resolveDedupCachePath(projectRoot: string): string {
 			: `side-quest-hooks-cache-${uid}`
 	const cacheDir = path.join(tmpBase, cacheDirName)
 	ensureSecureDirectory(cacheDir, uid)
-	const fileId = Bun.hash(projectRoot).toString(16)
+	const fileId = createHash('sha256').update(projectRoot).digest('hex')
 	return path.join(cacheDir, `${fileId}.json`)
 }
 
@@ -83,7 +86,17 @@ export function readDedupState(options: DedupStoreOptions): DedupState {
 				options.maxEntries,
 			),
 		}
-	} catch {
+	} catch (error) {
+		if (error instanceof DedupStoreSecurityError) {
+			emitMetric('hook.cache.securityError', {
+				phase: 'read',
+				error: error.message,
+			})
+			throw error
+		}
+		emitMetric('hook.cache.readCorrupt', {
+			error: error instanceof Error ? error.message : String(error),
+		})
 		return { entries: {} }
 	}
 }
@@ -144,14 +157,20 @@ function ensureSecureDirectory(directory: string, expectedUid?: number): void {
 		return
 	}
 	const stats = lstatSync(directory)
-	if (!stats.isDirectory()) {
-		throw new Error(`dedup cache path is not a directory: ${directory}`)
-	}
 	if (stats.isSymbolicLink()) {
-		throw new Error(`dedup cache directory cannot be a symlink: ${directory}`)
+		throw new DedupStoreSecurityError(
+			`dedup cache directory cannot be a symlink: ${directory}`,
+		)
+	}
+	if (!stats.isDirectory()) {
+		throw new DedupStoreSecurityError(
+			`dedup cache path is not a directory: ${directory}`,
+		)
 	}
 	if (expectedUid !== undefined && stats.uid !== expectedUid) {
-		throw new Error(`dedup cache directory uid mismatch: ${directory}`)
+		throw new DedupStoreSecurityError(
+			`dedup cache directory uid mismatch: ${directory}`,
+		)
 	}
 	chmodSync(directory, 0o700)
 }
@@ -159,7 +178,9 @@ function ensureSecureDirectory(directory: string, expectedUid?: number): void {
 function assertNotSymlink(filePath: string): void {
 	const stats = lstatSync(filePath)
 	if (stats.isSymbolicLink()) {
-		throw new Error(`dedup cache file cannot be a symlink: ${filePath}`)
+		throw new DedupStoreSecurityError(
+			`dedup cache file cannot be a symlink: ${filePath}`,
+		)
 	}
 }
 

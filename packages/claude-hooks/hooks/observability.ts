@@ -94,5 +94,13 @@ function createBunStderrWritableStream(): WritableStream {
 			}
 			writer = null
 		},
+		async abort() {
+			if (writer) {
+				try {
+					await writer.flush()
+				} catch {}
+			}
+			writer = null
+		},
 	})
 }

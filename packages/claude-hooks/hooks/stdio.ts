@@ -22,12 +22,13 @@ export function getStdinMaxBytes(): number {
 /**
  * Read stdin with a hard byte cap to avoid unbounded memory growth.
  */
-export async function readStdinJsonWithLimit(
+export async function readJsonChunksWithLimit(
+	chunks: AsyncIterable<string | Uint8Array>,
 	maxBytes: number,
 ): Promise<unknown> {
 	let total = 0
 	let content = ''
-	for await (const chunk of process.stdin) {
+	for await (const chunk of chunks) {
 		const text =
 			typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
 		total += Buffer.byteLength(text)
@@ -40,6 +41,18 @@ export async function readStdinJsonWithLimit(
 		throw new Error('stdin payload is empty')
 	}
 	return JSON.parse(content)
+}
+
+/**
+ * Read stdin with a hard byte cap to avoid unbounded memory growth.
+ */
+export async function readStdinJsonWithLimit(
+	maxBytes: number,
+): Promise<unknown> {
+	return readJsonChunksWithLimit(
+		process.stdin as AsyncIterable<string | Uint8Array>,
+		maxBytes,
+	)
 }
 
 /**

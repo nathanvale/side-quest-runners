@@ -477,7 +477,7 @@ async function resolveWorkdir(targetPath?: string): Promise<{
 	)
 }
 
-async function spawnWithTimeout(
+export async function spawnWithTimeout(
 	cmd: string[],
 	timeoutMs: number,
 	options?: {

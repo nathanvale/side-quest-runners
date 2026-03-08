@@ -1,6 +1,7 @@
 import { realpathSync } from 'node:fs'
 import type { ClaudeHookInput } from './claude-schema'
 import { buildDedupKey, hashDedupKey, normalizeTarget } from './dedup-key'
+import { emitMetric } from './observability'
 import { inferRunnerMapping } from './runner-mapping'
 import type { RunnerKind, RunnerOperation } from './types'
 
@@ -34,6 +35,10 @@ export function mapClaudeEventToDedupIntent(
 	}
 	const mapping = inferRunnerMapping(input.tool_name)
 	if (!mapping) {
+		emitMetric('hook.mapping.unknownToolName', {
+			eventName: input.hook_event_name,
+			toolName: input.tool_name,
+		})
 		return null
 	}
 	const target = normalizeTarget(input.tool_input)
@@ -57,5 +62,13 @@ export function mapClaudeEventToDedupIntent(
 
 function resolveProjectRoot(cwd: string | undefined): string {
 	const base = cwd && cwd.trim() !== '' ? cwd : process.cwd()
-	return realpathSync(base)
+	try {
+		return realpathSync(base)
+	} catch {
+		try {
+			return realpathSync(process.cwd())
+		} catch {
+			return process.cwd()
+		}
+	}
 }

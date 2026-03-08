@@ -55,4 +55,42 @@ describe('decideDedupAction', () => {
 		})
 		expect(result.action).toBe('fallback')
 	})
+
+	test('returns pointer exactly at ttl boundary', () => {
+		const result = decideDedupAction({
+			eventName: 'PostToolUse',
+			runnerKind: 'bun',
+			operation: 'runTests',
+			dedupKeyId: 'abc123',
+			nowMs: 61_000,
+			ttlMs: 60_000,
+			existingRecord: {
+				createdAtMs: 1_000,
+				hookSeen: true,
+				mcpSeen: true,
+				mcpWasError: false,
+			},
+			fallbackSummary: { message: 'fallback' },
+		})
+		expect(result.action).toBe('pointer')
+	})
+
+	test('returns fallback after ttl has expired', () => {
+		const result = decideDedupAction({
+			eventName: 'PostToolUse',
+			runnerKind: 'bun',
+			operation: 'runTests',
+			dedupKeyId: 'abc123',
+			nowMs: 61_001,
+			ttlMs: 60_000,
+			existingRecord: {
+				createdAtMs: 1_000,
+				hookSeen: true,
+				mcpSeen: true,
+				mcpWasError: false,
+			},
+			fallbackSummary: { message: 'fallback' },
+		})
+		expect(result.action).toBe('fallback')
+	})
 })

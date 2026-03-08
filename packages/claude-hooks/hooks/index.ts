@@ -51,13 +51,16 @@ export function createHookHandler(deps?: Partial<HookHandlerDependencies>) {
 /**
  * Execute CLI command with stdout-safety fallback on all unexpected errors.
  */
-export async function runCli(argv: string[]): Promise<void> {
+export async function runCli(
+	argv: string[],
+	deps?: Partial<HookHandlerDependencies>,
+): Promise<void> {
 	const startedAtMs = Date.now()
 	let command: HookCommand | undefined
 	try {
-		command = parseCommand(argv)
-		const handler = createHookHandler()
 		await setupObservability()
+		command = parseCommand(argv)
+		const handler = createHookHandler(deps)
 		emitMetric('hook.events.total', { command })
 		const output = await handler(command)
 		recordOutputMetrics(command, output)

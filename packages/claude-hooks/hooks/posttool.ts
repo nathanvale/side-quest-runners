@@ -42,7 +42,7 @@ export function handlePostToolUse(
 		const nextRecord = {
 			createdAtMs: nowMs,
 			hookSeen: true,
-			mcpSeen: true,
+			mcpSeen: hasToolResponse,
 			mcpWasError: readMcpErrorFlag(intent.toolResponse),
 		}
 		const nextState = withUpdatedRecord(state, intent.dedupKeyId, nextRecord)
@@ -123,5 +123,27 @@ function readMcpErrorFlag(toolResponse: unknown): boolean {
 		return false
 	}
 	const response = toolResponse as Record<string, unknown>
-	return response.isError === true
+	if (response.isError === true) {
+		return true
+	}
+	if (typeof response.error === 'string') {
+		return true
+	}
+	if (typeof response.error === 'object' && response.error !== null) {
+		return true
+	}
+
+	const structuredContent = response.structuredContent
+	if (
+		typeof structuredContent === 'object' &&
+		structuredContent !== null &&
+		typeof (structuredContent as Record<string, unknown>).code === 'string' &&
+		typeof (structuredContent as Record<string, unknown>).message === 'string'
+	) {
+		return true
+	}
+
+	return (
+		typeof response.code === 'string' && typeof response.message === 'string'
+	)
 }

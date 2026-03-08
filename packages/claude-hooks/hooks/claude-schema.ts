@@ -50,12 +50,24 @@ const hookOutputSchema = z
 		hookSpecificOutput: hookSpecificOutputSchema.optional(),
 	})
 	.strict()
+	.superRefine((value, ctx) => {
+		if (
+			value.hookSpecificOutput &&
+			value.hookSpecificOutput.hookEventName === undefined
+		) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: 'hookSpecificOutput requires hookEventName',
+				path: ['hookSpecificOutput', 'hookEventName'],
+			})
+		}
+	})
 
 /**
  * Parse and validate raw hook input JSON from stdin.
  */
 export function parseClaudeHookInput(value: unknown): ClaudeHookInput {
-	return commonInputSchema.parse(value)
+	return sanitizeClaudeHookInput(commonInputSchema.parse(value))
 }
 
 /**
@@ -74,4 +86,15 @@ export function createEmptyHookOutput(eventName: HookEventName): HookOutput {
 			hookEventName: eventName,
 		},
 	})
+}
+
+function sanitizeClaudeHookInput(input: ClaudeHookInput): ClaudeHookInput {
+	return {
+		hook_event_name: input.hook_event_name,
+		cwd: input.cwd,
+		tool_name: input.tool_name,
+		tool_input: input.tool_input,
+		tool_response: input.tool_response,
+		tool_use_id: input.tool_use_id,
+	}
 }

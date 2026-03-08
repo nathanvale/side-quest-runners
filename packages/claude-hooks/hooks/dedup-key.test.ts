@@ -10,7 +10,20 @@ describe('normalizeTarget', () => {
 
 	test('falls back to dot on unsafe or missing values', () => {
 		expect(normalizeTarget({})).toBe('.')
-		expect(normalizeTarget({ path: '../\u0000bad' })).toBe('.')
+		expect(normalizeTarget({ path: '../\u0000bad' })).toMatch(/^input:/)
+	})
+
+	test('preserves unicode path-like values', () => {
+		expect(normalizeTarget({ path: 'src/naive-cafe/こんにちは.ts' })).toBe(
+			'src/naive-cafe/こんにちは.ts',
+		)
+	})
+
+	test('uses stable hashed fallback for non-path-like objects', () => {
+		expect(normalizeTarget({ response_format: 'json', limit: 5 })).toBe(
+			normalizeTarget({ limit: 5, response_format: 'json' }),
+		)
+		expect(normalizeTarget({ response_format: 'json', limit: 5 })).toMatch(/^input:/)
 	})
 })
 

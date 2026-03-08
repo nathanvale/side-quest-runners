@@ -15,6 +15,7 @@ import {
 	formatTscMarkdown,
 	parseTscOutput,
 	SERVER_VERSION,
+	spawnWithTimeout,
 	validatePath,
 	validatePathOrDefault,
 } from './index'
@@ -276,6 +277,26 @@ describe('buildTscOutput', () => {
 		})
 
 		expect(output.remediationHint).toContain('Delete .tsbuildinfo and retry')
+	})
+})
+
+describe('spawnWithTimeout', () => {
+	test('returns timedOut=true for long-running subprocesses', async () => {
+		const result = await spawnWithTimeout(['bun', '-e', 'setInterval(() => {}, 1000)'], 50)
+
+		expect(result.timedOut).toBe(true)
+		expect(typeof result.stdout).toBe('string')
+		expect(typeof result.stderr).toBe('string')
+	})
+
+	test('truncates oversized stdout when maxBytes is exceeded', async () => {
+		const result = await spawnWithTimeout(['bun', '-e', 'console.log("x".repeat(10_000))'], 5_000, {
+			maxBytes: 128,
+		})
+
+		expect(result.timedOut).toBe(false)
+		expect(result.stdoutTruncated).toBe(true)
+		expect(result.stdout.length).toBeLessThanOrEqual(128)
 	})
 })
 
