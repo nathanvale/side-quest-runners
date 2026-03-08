@@ -165,26 +165,45 @@ async function collectStreamText(
 	return { text, truncated }
 }
 
-const failureSchema = z.object({
+const failureSchema: z.ZodObject<{
+	file: z.ZodString
+	message: z.ZodString
+	line: z.ZodNullable<z.ZodOptional<z.ZodNumber>>
+	stack: z.ZodNullable<z.ZodOptional<z.ZodString>>
+}> = z.object({
 	file: z.string(),
 	message: z.string(),
 	line: z.number().optional().nullable(),
 	stack: z.string().optional().nullable(),
 })
 
-const testSummarySchema = z.object({
+const testSummarySchema: z.ZodObject<{
+	passed: z.ZodNumber
+	failed: z.ZodNumber
+	total: z.ZodNumber
+	failures: z.ZodArray<typeof failureSchema>
+}> = z.object({
 	passed: z.number(),
 	failed: z.number(),
 	total: z.number(),
 	failures: z.array(failureSchema),
 })
 
-const coverageFileSchema = z.object({
+const coverageFileSchema: z.ZodObject<{
+	file: z.ZodString
+	percent: z.ZodNumber
+}> = z.object({
 	file: z.string(),
 	percent: z.number(),
 })
 
-const testCoverageSchema = z.object({
+const testCoverageSchema: z.ZodObject<{
+	summary: typeof testSummarySchema
+	coverage: z.ZodObject<{
+		percent: z.ZodNumber
+		uncovered: z.ZodArray<typeof coverageFileSchema>
+	}>
+}> = z.object({
 	summary: testSummarySchema,
 	coverage: z.object({
 		percent: z.number(),

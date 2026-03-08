@@ -132,7 +132,14 @@ interface BiomeServerOptions {
 	stderrStream?: WritableStream
 }
 
-const lintDiagnosticSchema = z.object({
+const lintDiagnosticSchema: z.ZodObject<{
+	file: z.ZodString
+	message: z.ZodString
+	code: z.ZodString
+	line: z.ZodNumber
+	severity: z.ZodEnum<['error', 'warning', 'info']>
+	suggestion: z.ZodNullable<z.ZodOptional<z.ZodString>>
+}> = z.object({
 	file: z.string(),
 	message: z.string(),
 	code: z.string(),
@@ -141,18 +148,28 @@ const lintDiagnosticSchema = z.object({
 	suggestion: z.string().optional().nullable(),
 })
 
-const lintSummarySchema = z.object({
+const lintSummarySchema: z.ZodObject<{
+	errorCount: z.ZodNumber
+	warningCount: z.ZodNumber
+	diagnostics: z.ZodArray<typeof lintDiagnosticSchema>
+}> = z.object({
 	errorCount: z.number(),
 	warningCount: z.number(),
 	diagnostics: z.array(lintDiagnosticSchema),
 })
 
-const lintFixSchema = z.object({
+const lintFixSchema: z.ZodObject<{
+	fixed: z.ZodNumber
+	remaining: typeof lintSummarySchema
+}> = z.object({
 	fixed: z.number(),
 	remaining: lintSummarySchema,
 })
 
-const formatCheckSchema = z.object({
+const formatCheckSchema: z.ZodObject<{
+	formatted: z.ZodBoolean
+	unformattedFiles: z.ZodArray<z.ZodString>
+}> = z.object({
 	formatted: z.boolean(),
 	unformattedFiles: z.array(z.string()),
 })
