@@ -477,7 +477,7 @@ async function resolveWorkdir(targetPath?: string): Promise<{
 	)
 }
 
-async function spawnWithTimeout(
+export async function spawnWithTimeout(
 	cmd: string[],
 	timeoutMs: number,
 	options?: {
@@ -724,6 +724,27 @@ function toToolFailure(error: unknown): ToolFailure {
 	}
 }
 
+function stripNullishDeep<T>(value: T): T {
+	if (value === null || value === undefined) {
+		return value
+	}
+	if (Array.isArray(value)) {
+		return value.map((entry) => stripNullishDeep(entry)) as T
+	}
+	if (typeof value !== 'object') {
+		return value
+	}
+	const source = value as Record<string, unknown>
+	const result: Record<string, unknown> = {}
+	for (const [key, entry] of Object.entries(source)) {
+		if (entry === null || entry === undefined) {
+			continue
+		}
+		result[key] = stripNullishDeep(entry)
+	}
+	return result as T
+}
+
 function createBunStderrWritableStream(): WritableStream {
 	let writer: ReturnType<(typeof Bun.stderr)['writer']> | null = null
 
@@ -867,10 +888,56 @@ export function formatTscMarkdown(output: TscOutput): string {
 		`Config: ${output.configPath}`,
 		'',
 	]
+	const commonFile = getCommonTscFile(output.errors)
+	if (commonFile) {
+		lines.push(`File: ${commonFile}`)
+		lines.push('')
+	}
 	for (const error of output.errors) {
-		lines.push(`- ${error.file}:${error.line}:${error.col} - ${error.message}`)
+		const location = commonFile
+			? `${error.line}:${error.col}`
+			: `${error.file}:${error.line}:${error.col}`
+		lines.push(`- ${location} - ${error.message}`)
 	}
 	return lines.join('\n')
+}
+
+function getCommonTscFile(errors: TscError[]): string | null {
+	if (errors.length === 0) {
+		return null
+	}
+	const first = errors[0]?.file
+	if (!first) {
+		return null
+	}
+	return errors.every((error) => error.file === first) ? first : null
+}
+
+export function compactTscOutputForJsonText(
+	output: TscOutput,
+): Record<string, unknown> {
+	const commonFile = getCommonTscFile(output.errors)
+	if (!commonFile) {
+		return stripNullishDeep(output) as unknown as Record<string, unknown>
+	}
+
+	return stripNullishDeep({
+		cwd: output.cwd,
+		configPath: output.configPath,
+		timedOut: output.timedOut,
+		exitCode: output.exitCode,
+		errorCount: output.errorCount,
+		parseWarning: output.parseWarning,
+		rawStderr: output.rawStderr,
+		remediationHint: output.remediationHint,
+		commonFile,
+		errors: output.errors.map((error) => ({
+			line: error.line,
+			col: error.col,
+			code: error.code,
+			message: error.message,
+		})),
+	})
 }
 
 /**
@@ -960,7 +1027,7 @@ export async function createTscServer(
 
 						const text =
 							format === 'json'
-								? JSON.stringify(output)
+								? JSON.stringify(compactTscOutputForJsonText(output))
 								: output.exitCode === 0 || output.errorCount === 0
 									? `TypeScript passed (cwd: ${output.cwd})`
 									: formatTscMarkdown(output)
@@ -975,7 +1042,9 @@ export async function createTscServer(
 						return {
 							isError: false,
 							content: [{ type: 'text', text }],
-							structuredContent: toStructured(output),
+							structuredContent: toStructured(
+								stripNullishDeep(output) as unknown as Record<string, unknown>,
+							),
 						}
 					} catch (error) {
 						const failure = toToolFailure(error)
@@ -1012,7 +1081,12 @@ export async function createTscServer(
 									text: `${failure.code}: ${failure.message}${failure.remediationHint ? `\n${failure.remediationHint}` : ''}`,
 								},
 							],
-							structuredContent: toStructured(failureOutput),
+							structuredContent: toStructured(
+								stripNullishDeep(failureOutput) as unknown as Record<
+									string,
+									unknown
+								>,
+							),
 						}
 					}
 				},

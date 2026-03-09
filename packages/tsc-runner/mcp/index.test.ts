@@ -8,12 +8,14 @@ import { LoggingMessageNotificationSchema } from '@modelcontextprotocol/sdk/type
 import {
 	_resetGitRootCache,
 	buildTscOutput,
+	compactTscOutputForJsonText,
 	createTscInvocation,
 	createTscServer,
 	detectTsBuildInfoCorruption,
 	formatTscMarkdown,
 	parseTscOutput,
 	SERVER_VERSION,
+	spawnWithTimeout,
 	validatePath,
 	validatePathOrDefault,
 } from './index'
@@ -102,6 +104,92 @@ describe('formatTscMarkdown', () => {
 		expect(markdown).toContain('Argument type mismatch.')
 		expect(markdown).toContain('tsconfig.json')
 	})
+
+	test('deduplicates shared file path in markdown output', () => {
+		const markdown = formatTscMarkdown({
+			cwd: '/repo',
+			configPath: '/repo/tsconfig.json',
+			timedOut: false,
+			exitCode: 1,
+			errors: [
+				{
+					file: 'src/index.ts',
+					line: 10,
+					col: 5,
+					code: 'TS2322',
+					message: 'First',
+				},
+				{
+					file: 'src/index.ts',
+					line: 20,
+					col: 3,
+					code: 'TS2345',
+					message: 'Second',
+				},
+			],
+			errorCount: 2,
+		})
+
+		expect(markdown).toContain('File: src/index.ts')
+		expect(markdown).toContain('- 10:5 - First')
+		expect(markdown).toContain('- 20:3 - Second')
+	})
+})
+
+describe('token-efficiency helpers', () => {
+	test('compactTscOutputForJsonText deduplicates shared file paths', () => {
+		const compact = compactTscOutputForJsonText({
+			cwd: '/repo',
+			configPath: '/repo/tsconfig.json',
+			timedOut: false,
+			exitCode: 1,
+			errors: [
+				{
+					file: 'src/index.ts',
+					line: 10,
+					col: 5,
+					code: 'TS2322',
+					message: 'First',
+				},
+				{
+					file: 'src/index.ts',
+					line: 20,
+					col: 3,
+					code: 'TS2345',
+					message: 'Second',
+				},
+			],
+			errorCount: 2,
+			parseWarning: undefined,
+			rawStderr: undefined,
+			remediationHint: undefined,
+		})
+
+		expect(compact).toMatchInlineSnapshot(`
+			{
+			  "commonFile": "src/index.ts",
+			  "configPath": "/repo/tsconfig.json",
+			  "cwd": "/repo",
+			  "errorCount": 2,
+			  "errors": [
+			    {
+			      "code": "TS2322",
+			      "col": 5,
+			      "line": 10,
+			      "message": "First",
+			    },
+			    {
+			      "code": "TS2345",
+			      "col": 3,
+			      "line": 20,
+			      "message": "Second",
+			    },
+			  ],
+			  "exitCode": 1,
+			  "timedOut": false,
+			}
+		`)
+	})
 })
 
 describe('createTscInvocation', () => {
@@ -189,6 +277,26 @@ describe('buildTscOutput', () => {
 		})
 
 		expect(output.remediationHint).toContain('Delete .tsbuildinfo and retry')
+	})
+})
+
+describe('spawnWithTimeout', () => {
+	test('returns timedOut=true for long-running subprocesses', async () => {
+		const result = await spawnWithTimeout(['bun', '-e', 'setInterval(() => {}, 1000)'], 50)
+
+		expect(result.timedOut).toBe(true)
+		expect(typeof result.stdout).toBe('string')
+		expect(typeof result.stderr).toBe('string')
+	})
+
+	test('truncates oversized stdout when maxBytes is exceeded', async () => {
+		const result = await spawnWithTimeout(['bun', '-e', 'console.log("x".repeat(10_000))'], 5_000, {
+			maxBytes: 128,
+		})
+
+		expect(result.timedOut).toBe(false)
+		expect(result.stdoutTruncated).toBe(true)
+		expect(result.stdout.length).toBeLessThanOrEqual(128)
 	})
 })
 

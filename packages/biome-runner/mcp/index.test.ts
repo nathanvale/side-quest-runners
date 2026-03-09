@@ -6,6 +6,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import {
 	_resetGitRootCache,
+	compactLintFixResultForJsonText,
+	compactLintSummaryForJsonText,
 	createBiomeInvocation,
 	createBiomeServer,
 	parseBiomeOutput,
@@ -52,6 +54,94 @@ describe('parseBiomeOutput', () => {
 		const result = parseBiomeOutput('not json')
 		expect(result.errorCount).toBe(1)
 		expect(result.diagnostics[0]?.code).toBe('internal_error')
+	})
+})
+
+describe('token-efficiency helpers', () => {
+	test('compactLintSummaryForJsonText deduplicates common file path', () => {
+		const compact = compactLintSummaryForJsonText({
+			errorCount: 1,
+			warningCount: 1,
+			diagnostics: [
+				{
+					file: 'src/index.ts',
+					line: 10,
+					message: 'Use ===',
+					code: 'lint/suspicious/noDoubleEquals',
+					severity: 'error',
+					suggestion: null,
+				},
+				{
+					file: 'src/index.ts',
+					line: 20,
+					message: 'Unused variable',
+					code: 'lint/correctness/noUnusedVariables',
+					severity: 'warning',
+					suggestion: null,
+				},
+			],
+		})
+
+		expect(compact).toMatchInlineSnapshot(`
+			{
+			  "commonFile": "src/index.ts",
+			  "diagnostics": [
+			    {
+			      "code": "lint/suspicious/noDoubleEquals",
+			      "line": 10,
+			      "message": "Use ===",
+			      "severity": "error",
+			    },
+			    {
+			      "code": "lint/correctness/noUnusedVariables",
+			      "line": 20,
+			      "message": "Unused variable",
+			      "severity": "warning",
+			    },
+			  ],
+			  "errorCount": 1,
+			  "warningCount": 1,
+			}
+		`)
+	})
+
+	test('compactLintFixResultForJsonText strips null suggestion fields', () => {
+		const compact = compactLintFixResultForJsonText({
+			fixed: 1,
+			remaining: {
+				errorCount: 1,
+				warningCount: 0,
+				diagnostics: [
+					{
+						file: 'src/index.ts',
+						line: 3,
+						message: 'Problem',
+						code: 'lint/rule',
+						severity: 'error',
+						suggestion: null,
+					},
+				],
+			},
+		})
+
+		expect(compact).toMatchInlineSnapshot(`
+			{
+			  "fixed": 1,
+			  "remaining": {
+			    "commonFile": "src/index.ts",
+			    "diagnostics": [
+			      {
+			        "code": "lint/rule",
+			        "line": 3,
+			        "message": "Problem",
+			        "severity": "error",
+			      },
+			    ],
+			    "errorCount": 1,
+			    "warningCount": 0,
+			  },
+			}
+		`)
 	})
 })
 

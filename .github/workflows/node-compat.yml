@@ -4,7 +4,9 @@ on:
   # Verify the built CLI works on Node.js (since Bun is now primary runtime)
   pull_request:
     paths:
-      - 'src/**'
+      - 'packages/*/mcp/**'
+      - 'packages/*/hooks/**'
+      - 'packages/*/package.json'
       - 'package.json'
       - 'tsconfig*.json'
   workflow_dispatch: {}
@@ -43,11 +45,11 @@ jobs:
         with:
           node-version-file: .nvmrc
 
-      - name: Node.js CLI smoke test
-        if: hashFiles('dist/bin/index.js') != ''
-        run: node ./dist/bin/index.js --help
-
       - name: Verify ESM imports work on Node.js
-        if: hashFiles('dist/index.js') != ''
         run: |
-          node -e "import('./dist/index.js').then(m => console.log('ESM import OK, exports:', Object.keys(m)))"
+          for pkg in packages/*/dist/index.js; do
+            if [ -f "$pkg" ]; then
+              echo "Testing $pkg..."
+              node -e "import('./$pkg').then(m => console.log('ESM import OK:', Object.keys(m)))"
+            fi
+          done

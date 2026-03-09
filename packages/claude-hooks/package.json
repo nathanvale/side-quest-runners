@@ -1,0 +1,61 @@
+{
+	"name": "@side-quest/claude-hooks",
+	"version": "0.0.0",
+	"description": "Claude Code hook dedup adapter for side-quest runners",
+	"author": {
+		"name": "Nathan Vale",
+		"url": "https://github.com/nathanvale"
+	},
+	"license": "MIT",
+	"type": "module",
+	"bin": {
+		"sq-claude-hook": "./dist/index.js"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist/**",
+		"README.md",
+		"LICENSE",
+		"CHANGELOG.md"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nathanvale/side-quest-runners.git",
+		"directory": "packages/claude-hooks"
+	},
+	"bugs": {
+		"url": "https://github.com/nathanvale/side-quest-runners/issues"
+	},
+	"homepage": "https://github.com/nathanvale/side-quest-runners/tree/main/packages/claude-hooks#readme",
+	"keywords": [
+		"claude-code",
+		"hooks",
+		"dedup",
+		"mcp",
+		"token-efficiency"
+	],
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"scripts": {
+		"build": "bunx bunup",
+		"clean": "rimraf dist 2>/dev/null || true",
+		"test": "bun test",
+		"test:smoke": "bun ../../scripts/smoke/run-smoke.ts",
+		"test:ci": "TF_BUILD=true bun test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@logtape/logtape": "^2.0.4",
+		"zod": "^3.25"
+	}
+}

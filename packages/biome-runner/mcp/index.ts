@@ -50,7 +50,7 @@ export interface LintDiagnostic {
 	code: string
 	line: number
 	severity: 'error' | 'warning' | 'info'
-	suggestion: string | null
+	suggestion?: string | null
 }
 
 export interface LintSummary {
@@ -132,27 +132,44 @@ interface BiomeServerOptions {
 	stderrStream?: WritableStream
 }
 
-const lintDiagnosticSchema = z.object({
+const lintDiagnosticSchema: z.ZodObject<{
+	file: z.ZodString
+	message: z.ZodString
+	code: z.ZodString
+	line: z.ZodNumber
+	severity: z.ZodEnum<['error', 'warning', 'info']>
+	suggestion: z.ZodNullable<z.ZodOptional<z.ZodString>>
+}> = z.object({
 	file: z.string(),
 	message: z.string(),
 	code: z.string(),
 	line: z.number(),
 	severity: z.enum(['error', 'warning', 'info']),
-	suggestion: z.string().nullable(),
+	suggestion: z.string().optional().nullable(),
 })
 
-const lintSummarySchema = z.object({
+const lintSummarySchema: z.ZodObject<{
+	errorCount: z.ZodNumber
+	warningCount: z.ZodNumber
+	diagnostics: z.ZodArray<typeof lintDiagnosticSchema>
+}> = z.object({
 	errorCount: z.number(),
 	warningCount: z.number(),
 	diagnostics: z.array(lintDiagnosticSchema),
 })
 
-const lintFixSchema = z.object({
+const lintFixSchema: z.ZodObject<{
+	fixed: z.ZodNumber
+	remaining: typeof lintSummarySchema
+}> = z.object({
 	fixed: z.number(),
 	remaining: lintSummarySchema,
 })
 
-const formatCheckSchema = z.object({
+const formatCheckSchema: z.ZodObject<{
+	formatted: z.ZodBoolean
+	unformattedFiles: z.ZodArray<z.ZodString>
+}> = z.object({
 	formatted: z.boolean(),
 	unformattedFiles: z.array(z.string()),
 })
@@ -578,7 +595,7 @@ function createToolSuccess(text: string, structured: object): CallToolResult {
 	return {
 		isError: false,
 		content: [{ type: 'text', text }],
-		structuredContent: toStructured(structured),
+		structuredContent: toStructured(stripNullishDeep(structured)),
 	}
 }
 
@@ -588,6 +605,27 @@ function createToolFailure(failure: ToolFailure): CallToolResult {
 		content: [{ type: 'text', text: `${failure.code}: ${failure.message}` }],
 		structuredContent: toStructured(failure),
 	}
+}
+
+function stripNullishDeep<T>(value: T): T {
+	if (value === null || value === undefined) {
+		return value
+	}
+	if (Array.isArray(value)) {
+		return value.map((entry) => stripNullishDeep(entry)) as T
+	}
+	if (typeof value !== 'object') {
+		return value
+	}
+	const source = value as Record<string, unknown>
+	const result: Record<string, unknown> = {}
+	for (const [key, entry] of Object.entries(source)) {
+		if (entry === null || entry === undefined) {
+			continue
+		}
+		result[key] = stripNullishDeep(entry)
+	}
+	return result as T
 }
 
 /**
@@ -810,7 +848,7 @@ function formatLintSummary(
 	format: 'markdown' | 'json',
 ): string {
 	if (format === 'json') {
-		return JSON.stringify(summary)
+		return JSON.stringify(compactLintSummaryForJsonText(summary))
 	}
 
 	if (summary.errorCount === 0 && summary.warningCount === 0) {
@@ -818,10 +856,17 @@ function formatLintSummary(
 	}
 
 	let output = `Found ${summary.errorCount} errors and ${summary.warningCount} warnings:\n\n`
+	const commonFile = getCommonDiagnosticFile(summary.diagnostics)
+	if (commonFile) {
+		output += `File: ${commonFile}\n\n`
+	}
 
 	for (const diagnostic of summary.diagnostics) {
 		const icon = diagnostic.severity === 'error' ? '[error]' : '[warn]'
-		output += `${icon} ${diagnostic.file}:${diagnostic.line} [${diagnostic.code}]\n`
+		const location = commonFile
+			? `${diagnostic.line}`
+			: `${diagnostic.file}:${diagnostic.line}`
+		output += `${icon} ${location} [${diagnostic.code}]\n`
 		output += `   ${diagnostic.message}\n`
 		if (diagnostic.suggestion) {
 			output += '   Suggestion available\n'
@@ -837,7 +882,7 @@ function formatLintFixResult(
 	format: 'markdown' | 'json',
 ): string {
 	if (format === 'json') {
-		return JSON.stringify(result)
+		return JSON.stringify(compactLintFixResultForJsonText(result))
 	}
 
 	let output = ''
@@ -853,13 +898,63 @@ function formatLintFixResult(
 	}
 
 	output += `${result.remaining.errorCount} error(s) and ${result.remaining.warningCount} warning(s) remain:\n\n`
+	const commonFile = getCommonDiagnosticFile(result.remaining.diagnostics)
+	if (commonFile) {
+		output += `File: ${commonFile}\n\n`
+	}
 	for (const diagnostic of result.remaining.diagnostics) {
 		const icon = diagnostic.severity === 'error' ? '[error]' : '[warn]'
-		output += `${icon} ${diagnostic.file}:${diagnostic.line} [${diagnostic.code}]\n`
+		const location = commonFile
+			? `${diagnostic.line}`
+			: `${diagnostic.file}:${diagnostic.line}`
+		output += `${icon} ${location} [${diagnostic.code}]\n`
 		output += `   ${diagnostic.message}\n\n`
 	}
 
 	return output.trim()
+}
+
+function getCommonDiagnosticFile(diagnostics: LintDiagnostic[]): string | null {
+	if (diagnostics.length === 0) {
+		return null
+	}
+	const first = diagnostics[0]?.file
+	if (!first) {
+		return null
+	}
+	return diagnostics.every((diagnostic) => diagnostic.file === first)
+		? first
+		: null
+}
+
+export function compactLintSummaryForJsonText(
+	summary: LintSummary,
+): Record<string, unknown> {
+	const commonFile = getCommonDiagnosticFile(summary.diagnostics)
+	if (!commonFile) {
+		return stripNullishDeep(summary) as unknown as Record<string, unknown>
+	}
+	return stripNullishDeep({
+		errorCount: summary.errorCount,
+		warningCount: summary.warningCount,
+		commonFile,
+		diagnostics: summary.diagnostics.map((diagnostic) => ({
+			line: diagnostic.line,
+			message: diagnostic.message,
+			code: diagnostic.code,
+			severity: diagnostic.severity,
+			suggestion: diagnostic.suggestion,
+		})),
+	})
+}
+
+export function compactLintFixResultForJsonText(
+	result: z.infer<typeof lintFixSchema>,
+): Record<string, unknown> {
+	return stripNullishDeep({
+		fixed: result.fixed,
+		remaining: compactLintSummaryForJsonText(result.remaining),
+	}) as Record<string, unknown>
 }
 
 function formatFormatCheckResult(

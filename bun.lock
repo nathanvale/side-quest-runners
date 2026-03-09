@@ -22,7 +22,7 @@
     },
     "packages/biome-runner": {
       "name": "@side-quest/biome-runner",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "bin": {
         "biome-runner": "./dist/index.js",
       },
@@ -34,7 +34,7 @@
     },
     "packages/bun-runner": {
       "name": "@side-quest/bun-runner",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "bin": {
         "bun-runner": "./dist/index.js",
       },
@@ -44,9 +44,20 @@
         "zod": "^3.25",
       },
     },
+    "packages/claude-hooks": {
+      "name": "@side-quest/claude-hooks",
+      "version": "0.0.0",
+      "bin": {
+        "sq-claude-hook": "./dist/index.js",
+      },
+      "dependencies": {
+        "@logtape/logtape": "^2.0.4",
+        "zod": "^3.25",
+      },
+    },
     "packages/tsc-runner": {
       "name": "@side-quest/tsc-runner",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "bin": {
         "tsc-runner": "./dist/index.js",
       },
@@ -300,6 +311,8 @@
     "@side-quest/biome-runner": ["@side-quest/biome-runner@workspace:packages/biome-runner"],
 
     "@side-quest/bun-runner": ["@side-quest/bun-runner@workspace:packages/bun-runner"],
+
+    "@side-quest/claude-hooks": ["@side-quest/claude-hooks@workspace:packages/claude-hooks"],
 
     "@side-quest/tsc-runner": ["@side-quest/tsc-runner@workspace:packages/tsc-runner"],
 

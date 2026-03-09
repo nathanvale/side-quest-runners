@@ -1,0 +1,6 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {},
+	"include": ["hooks/**/*.ts"],
+	"exclude": ["node_modules", "dist", "**/*.test.ts"]
+}
