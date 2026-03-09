@@ -1,0 +1,7 @@
+# Sensitive automation paths default to the repo owner.
+# For organization repos, switch this to a real team like @your-org/platform.
+/.github/workflows/ @nathanvale
+/.github/actions/ @nathanvale
+/.github/scripts/ @nathanvale
+/.changeset/config.json @nathanvale
+/scripts/setup-protect.ts @nathanvale
