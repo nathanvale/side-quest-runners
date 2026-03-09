@@ -1,6 +1,6 @@
 {
 	"name": "@side-quest/claude-hooks",
-	"version": "0.0.0",
+	"version": "0.1.0",
 	"description": "Claude Code hook dedup adapter for side-quest runners",
 	"author": {
 		"name": "Nathan Vale",
