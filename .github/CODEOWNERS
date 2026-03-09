@@ -3,5 +3,7 @@
 /.github/workflows/ @nathanvale
 /.github/actions/ @nathanvale
 /.github/scripts/ @nathanvale
+/.github/dependabot.yml @nathanvale
+/.github/CODEOWNERS @nathanvale
 /.changeset/config.json @nathanvale
 /scripts/setup-protect.ts @nathanvale
