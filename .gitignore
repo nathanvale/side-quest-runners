@@ -32,6 +32,9 @@ lerna-debug.log*
 # Diagnostic reports
 report.*.json
 
+# Pack artifacts
+*.tgz
+
 # Caches & tooling
 .cache/
 .eslintcache
