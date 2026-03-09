@@ -51,6 +51,7 @@
 		"release": "changeset publish --provenance",
 		"release:snapshot:canary": "changeset version --snapshot canary && changeset publish --tag canary",
 		"security:audit": "npm audit",
+		"setup:protect": "bun scripts/setup-protect.ts",
 		"test": "bun run --filter '*' test",
 		"test:smoke": "bun scripts/smoke/run-smoke.ts",
 		"test:ci": "TF_BUILD=true bun run --filter '*' test",

@@ -5,7 +5,14 @@ updates:
     schedule:
       interval: 'weekly'
       day: 'sunday'
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 3
     commit-message:
       prefix: 'chore(gha)'
       include: 'scope'
+    groups:
+      github-actions-minor-and-patch:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
