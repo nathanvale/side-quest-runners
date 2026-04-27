@@ -13,7 +13,12 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 interface RunnerCase {
-	name: 'tsc-runner' | 'bun-runner' | 'biome-runner' | 'claude-hooks'
+	name:
+		| 'tsc-runner'
+		| 'bun-runner'
+		| 'biome-runner'
+		| 'claude-hooks'
+		| 'orphan-detection'
 	entrypoint: string
 	run(sandboxRoot: string): Promise<void>
 }
@@ -352,6 +357,232 @@ async function runBiomeSmoke(sandboxRoot: string): Promise<void> {
 	})
 }
 
+/**
+ * Spawn an intermediate process that itself spawns the runner binary with
+ * fully detached stdio. Returns the intermediate's process handle and the
+ * runner's PID (read from the intermediate's stdout).
+ *
+ * Detached stdio is load-bearing: it ensures killing the intermediate does
+ * not close the runner's stdin, so transport.onclose does not fire and the
+ * watcher is the only mechanism that can trigger shutdown.
+ */
+async function spawnDetachedRunner(args: {
+	runnerEntry: string
+	parentCheckMs: string
+}): Promise<{ intermediate: ReturnType<typeof Bun.spawn>; runnerPid: number }> {
+	const intermediateScript = `
+		const proc = Bun.spawn({
+			cmd: ['bun', process.env.RUNNER_ENTRY],
+			stdio: ['ignore', 'ignore', 'ignore'],
+			env: {
+				...process.env,
+				MCP_PARENT_CHECK_MS: process.env.MCP_PARENT_CHECK_MS,
+			},
+		});
+		process.stdout.write(String(proc.pid) + '\\n');
+		// Idle forever; the parent harness kills this process.
+		setInterval(() => {}, 60_000);
+	`.trim()
+
+	const intermediate = Bun.spawn(['bun', '-e', intermediateScript], {
+		stdout: 'pipe',
+		stderr: 'pipe',
+		env: {
+			...process.env,
+			RUNNER_ENTRY: args.runnerEntry,
+			MCP_PARENT_CHECK_MS: args.parentCheckMs,
+		},
+	})
+
+	const reader = intermediate.stdout.getReader()
+	const decoder = new TextDecoder()
+	let buffer = ''
+	const deadline = Date.now() + 5000
+	let runnerPid: number | undefined
+
+	while (Date.now() < deadline && runnerPid === undefined) {
+		const readPromise = reader.read()
+		const timeoutPromise = new Promise<{ done: true; value?: undefined }>(
+			(resolve) => setTimeout(() => resolve({ done: true }), 500),
+		)
+		const result = (await Promise.race([readPromise, timeoutPromise])) as {
+			done: boolean
+			value?: Uint8Array
+		}
+		if (result.value) {
+			buffer += decoder.decode(result.value)
+			const newlineIdx = buffer.indexOf('\n')
+			if (newlineIdx >= 0) {
+				const candidate = buffer.slice(0, newlineIdx).trim()
+				const parsed = Number(candidate)
+				if (Number.isFinite(parsed) && parsed > 0) {
+					runnerPid = parsed
+					break
+				}
+			}
+		}
+		if (result.done && !result.value) {
+			break
+		}
+	}
+
+	try {
+		reader.releaseLock()
+	} catch {
+		// Ignore: lock release races with intermediate exit.
+	}
+
+	if (runnerPid === undefined) {
+		try {
+			intermediate.kill('SIGKILL')
+		} catch {
+			// Ignore: intermediate may have already exited.
+		}
+		throw new Error('Failed to read runner PID from intermediate process')
+	}
+
+	return { intermediate, runnerPid }
+}
+
+function isProcessAlive(pid: number): boolean {
+	try {
+		// Signal 0 only checks for the existence of the process.
+		process.kill(pid, 0)
+		return true
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code
+		// ESRCH = no such process (definitively dead).
+		// EPERM = exists but no permission (treat as alive — should not happen for our own children).
+		return code === 'EPERM'
+	}
+}
+
+async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs
+	while (Date.now() < deadline) {
+		if (!isProcessAlive(pid)) {
+			return true
+		}
+		await new Promise((resolve) => setTimeout(resolve, 50))
+	}
+	return false
+}
+
+async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
+	const runners = [
+		{
+			name: 'tsc-runner',
+			path: path.join(REPO_ROOT, 'packages/tsc-runner/dist/index.js'),
+		},
+		{
+			name: 'bun-runner',
+			path: path.join(REPO_ROOT, 'packages/bun-runner/dist/index.js'),
+		},
+		{
+			name: 'biome-runner',
+			path: path.join(REPO_ROOT, 'packages/biome-runner/dist/index.js'),
+		},
+	]
+
+	for (const runner of runners) {
+		// Happy path: watcher enabled at 200ms — runner exits within 5s of parent death.
+		{
+			const { intermediate, runnerPid } = await spawnDetachedRunner({
+				runnerEntry: runner.path,
+				parentCheckMs: '200',
+			})
+			try {
+				assert(
+					isProcessAlive(runnerPid),
+					`${runner.name}: runner not alive after spawn`,
+				)
+				intermediate.kill('SIGKILL')
+				const exited = await waitForExit(runnerPid, 5000)
+				assert(
+					exited,
+					`${runner.name}: runner ${runnerPid} did not exit within 5s after parent SIGKILL (watcher should have fired)`,
+				)
+			} finally {
+				if (isProcessAlive(runnerPid)) {
+					try {
+						process.kill(runnerPid, 'SIGKILL')
+					} catch {
+						// Ignore.
+					}
+				}
+				try {
+					intermediate.kill('SIGKILL')
+				} catch {
+					// Ignore.
+				}
+				await intermediate.exited.catch(() => {})
+			}
+		}
+
+		// Negative control: watcher disabled — runner stays alive ≥ 2s after parent dies.
+		// This proves the watcher (not transport.onclose) is the active mechanism above.
+		{
+			const { intermediate, runnerPid } = await spawnDetachedRunner({
+				runnerEntry: runner.path,
+				parentCheckMs: '0',
+			})
+			try {
+				intermediate.kill('SIGKILL')
+				await new Promise((resolve) => setTimeout(resolve, 2000))
+				assert(
+					isProcessAlive(runnerPid),
+					`${runner.name}: with MCP_PARENT_CHECK_MS=0, runner ${runnerPid} unexpectedly exited within 2s — stdin detachment may be leaking and happy-path test is no longer trustworthy`,
+				)
+			} finally {
+				if (isProcessAlive(runnerPid)) {
+					try {
+						process.kill(runnerPid, 'SIGKILL')
+					} catch {
+						// Ignore.
+					}
+				}
+				try {
+					intermediate.kill('SIGKILL')
+				} catch {
+					// Ignore.
+				}
+				await intermediate.exited.catch(() => {})
+			}
+		}
+
+		// Edge case: long interval — runner stays alive within the test window.
+		// Confirms the timer (not some other path) is the only mechanism firing.
+		{
+			const { intermediate, runnerPid } = await spawnDetachedRunner({
+				runnerEntry: runner.path,
+				parentCheckMs: '10000',
+			})
+			try {
+				intermediate.kill('SIGKILL')
+				await new Promise((resolve) => setTimeout(resolve, 1000))
+				assert(
+					isProcessAlive(runnerPid),
+					`${runner.name}: with MCP_PARENT_CHECK_MS=10000, runner ${runnerPid} exited within 1s — interval is not honored`,
+				)
+			} finally {
+				if (isProcessAlive(runnerPid)) {
+					try {
+						process.kill(runnerPid, 'SIGKILL')
+					} catch {
+						// Ignore.
+					}
+				}
+				try {
+					intermediate.kill('SIGKILL')
+				} catch {
+					// Ignore.
+				}
+				await intermediate.exited.catch(() => {})
+			}
+		}
+	}
+}
+
 async function runClaudeHooksSmoke(sandboxRoot: string): Promise<void> {
 	const cacheRoot = path.join(sandboxRoot, 'hooks-cache')
 	await mkdir(cacheRoot, { recursive: true })
@@ -451,6 +682,13 @@ async function run(): Promise<void> {
 			name: 'claude-hooks',
 			entrypoint: path.join(REPO_ROOT, 'packages/claude-hooks/hooks/index.ts'),
 			run: runClaudeHooksSmoke,
+		},
+		{
+			name: 'orphan-detection',
+			// Entrypoint is informational here — the case loops over all three
+			// dist/ binaries internally.
+			entrypoint: path.join(REPO_ROOT, 'packages/bun-runner/dist/index.js'),
+			run: runOrphanDetectionSmoke,
 		},
 	]
 

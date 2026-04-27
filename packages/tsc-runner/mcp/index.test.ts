@@ -9,10 +9,14 @@ import {
 	_resetGitRootCache,
 	buildTscOutput,
 	compactTscOutputForJsonText,
+	createParentLivenessWatcher,
 	createTscInvocation,
 	createTscServer,
+	DEFAULT_PARENT_CHECK_MS,
 	detectTsBuildInfoCorruption,
 	formatTscMarkdown,
+	MIN_PARENT_CHECK_MS,
+	parseParentCheckMs,
 	parseTscOutput,
 	SERVER_VERSION,
 	spawnWithTimeout,
@@ -573,6 +577,137 @@ describe('tsc_check integration', () => {
 			expect(notifications.some((entry) => entry.level === 'error')).toBe(true)
 		} finally {
 			await Promise.all([client.close(), server.close()])
+		}
+	})
+})
+
+describe('parseParentCheckMs', () => {
+	test('returns default when env is undefined', () => {
+		expect(parseParentCheckMs(undefined)).toBe(DEFAULT_PARENT_CHECK_MS)
+	})
+
+	test('returns default for empty / whitespace string', () => {
+		expect(parseParentCheckMs('')).toBe(DEFAULT_PARENT_CHECK_MS)
+		expect(parseParentCheckMs('   ')).toBe(DEFAULT_PARENT_CHECK_MS)
+	})
+
+	test('returns default for non-numeric / NaN values', () => {
+		expect(parseParentCheckMs('abc')).toBe(DEFAULT_PARENT_CHECK_MS)
+		expect(parseParentCheckMs('NaN')).toBe(DEFAULT_PARENT_CHECK_MS)
+	})
+
+	test('returns 0 (disabled) for zero', () => {
+		expect(parseParentCheckMs('0')).toBe(0)
+	})
+
+	test('returns 0 (disabled) for negative values', () => {
+		expect(parseParentCheckMs('-1')).toBe(0)
+		expect(parseParentCheckMs('-9999')).toBe(0)
+	})
+
+	test('clamps tiny positive values up to MIN_PARENT_CHECK_MS', () => {
+		expect(parseParentCheckMs('1')).toBe(MIN_PARENT_CHECK_MS)
+		expect(parseParentCheckMs('49')).toBe(MIN_PARENT_CHECK_MS)
+	})
+
+	test('passes through values at or above the minimum', () => {
+		expect(parseParentCheckMs('50')).toBe(50)
+		expect(parseParentCheckMs('200')).toBe(200)
+		expect(parseParentCheckMs('5000')).toBe(5000)
+	})
+})
+
+describe('createParentLivenessWatcher', () => {
+	test('returns undefined when intervalMs <= 0 (disabled)', () => {
+		const onParentDeath = () => {
+			throw new Error('should not be called')
+		}
+		expect(
+			createParentLivenessWatcher({
+				initialPpid: 1234,
+				getPpid: () => 1234,
+				onParentDeath,
+				intervalMs: 0,
+			}),
+		).toBeUndefined()
+		expect(
+			createParentLivenessWatcher({
+				initialPpid: 1234,
+				getPpid: () => 1234,
+				onParentDeath,
+				intervalMs: -1,
+			}),
+		).toBeUndefined()
+	})
+
+	test('registers a timer with .unref applied so it does not block the loop', () => {
+		const handle = createParentLivenessWatcher({
+			initialPpid: 1234,
+			getPpid: () => 1234,
+			onParentDeath: () => {
+				throw new Error('should not be called when ppid unchanged')
+			},
+			intervalMs: 60_000,
+		})
+		expect(handle).toBeDefined()
+		clearInterval(handle as ReturnType<typeof setInterval>)
+	})
+
+	test('does not invoke onParentDeath while ppid is unchanged', async () => {
+		let calls = 0
+		const handle = createParentLivenessWatcher({
+			initialPpid: 1234,
+			getPpid: () => 1234,
+			onParentDeath: () => {
+				calls += 1
+			},
+			intervalMs: 50,
+		})
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 180))
+			expect(calls).toBe(0)
+		} finally {
+			clearInterval(handle as ReturnType<typeof setInterval>)
+		}
+	})
+
+	test('invokes onParentDeath when ppid changes from initial', async () => {
+		let currentPpid = 1234
+		let calls = 0
+		const handle = createParentLivenessWatcher({
+			initialPpid: 1234,
+			getPpid: () => currentPpid,
+			onParentDeath: () => {
+				calls += 1
+			},
+			intervalMs: 50,
+		})
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 80))
+			expect(calls).toBe(0)
+			currentPpid = 1
+			await new Promise((resolve) => setTimeout(resolve, 120))
+			expect(calls).toBeGreaterThanOrEqual(1)
+		} finally {
+			clearInterval(handle as ReturnType<typeof setInterval>)
+		}
+	})
+
+	test('invokes onParentDeath when ppid is 1 even if equal to initial (defensive)', async () => {
+		let calls = 0
+		const handle = createParentLivenessWatcher({
+			initialPpid: 1,
+			getPpid: () => 1,
+			onParentDeath: () => {
+				calls += 1
+			},
+			intervalMs: 50,
+		})
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 120))
+			expect(calls).toBeGreaterThanOrEqual(1)
+		} finally {
+			clearInterval(handle as ReturnType<typeof setInterval>)
 		}
 	})
 })
