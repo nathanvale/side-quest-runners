@@ -36,8 +36,31 @@ interface ToolResult {
 	structuredContent?: Record<string, unknown>
 }
 
+interface ProductionRunnerBinary {
+	name: 'tsc-runner' | 'bun-runner' | 'biome-runner'
+	packageDir: string
+	entrypoint: string
+}
+
 const REPO_ROOT = path.resolve(import.meta.dir, '..', '..')
 const TOOL_TIMEOUT_MS = 15_000
+const PRODUCTION_RUNNER_BINARIES: ProductionRunnerBinary[] = [
+	{
+		name: 'tsc-runner',
+		packageDir: path.join(REPO_ROOT, 'packages/tsc-runner'),
+		entrypoint: path.join(REPO_ROOT, 'packages/tsc-runner/dist/index.js'),
+	},
+	{
+		name: 'bun-runner',
+		packageDir: path.join(REPO_ROOT, 'packages/bun-runner'),
+		entrypoint: path.join(REPO_ROOT, 'packages/bun-runner/dist/index.js'),
+	},
+	{
+		name: 'biome-runner',
+		packageDir: path.join(REPO_ROOT, 'packages/biome-runner'),
+		entrypoint: path.join(REPO_ROOT, 'packages/biome-runner/dist/index.js'),
+	},
+]
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) {
@@ -468,27 +491,32 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
 	return false
 }
 
-async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
-	const runners = [
-		{
-			name: 'tsc-runner',
-			path: path.join(REPO_ROOT, 'packages/tsc-runner/dist/index.js'),
-		},
-		{
-			name: 'bun-runner',
-			path: path.join(REPO_ROOT, 'packages/bun-runner/dist/index.js'),
-		},
-		{
-			name: 'biome-runner',
-			path: path.join(REPO_ROOT, 'packages/biome-runner/dist/index.js'),
-		},
-	]
+async function buildProductionRunnerBinaries(): Promise<void> {
+	console.log('[smoke] building production runner binaries...')
 
-	for (const runner of runners) {
+	for (const runner of PRODUCTION_RUNNER_BINARIES) {
+		const proc = Bun.spawn(['bun', 'run', 'build'], {
+			cwd: runner.packageDir,
+			stdout: 'inherit',
+			stderr: 'inherit',
+			env: process.env,
+		})
+		const exitCode = await proc.exited
+		assert(
+			exitCode === 0,
+			`${runner.name}: build failed with exit code ${exitCode}`,
+		)
+	}
+}
+
+async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
+	await buildProductionRunnerBinaries()
+
+	for (const runner of PRODUCTION_RUNNER_BINARIES) {
 		// Happy path: watcher enabled at 200ms — runner exits within 5s of parent death.
 		{
 			const { intermediate, runnerPid } = await spawnDetachedRunner({
-				runnerEntry: runner.path,
+				runnerEntry: runner.entrypoint,
 				parentCheckMs: '200',
 			})
 			try {
@@ -523,7 +551,7 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 		// This proves the watcher (not transport.onclose) is the active mechanism above.
 		{
 			const { intermediate, runnerPid } = await spawnDetachedRunner({
-				runnerEntry: runner.path,
+				runnerEntry: runner.entrypoint,
 				parentCheckMs: '0',
 			})
 			try {
@@ -562,7 +590,7 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 		// Confirms the timer (not some other path) is the only mechanism firing.
 		{
 			const { intermediate, runnerPid } = await spawnDetachedRunner({
-				runnerEntry: runner.path,
+				runnerEntry: runner.entrypoint,
 				parentCheckMs: '10000',
 			})
 			try {
