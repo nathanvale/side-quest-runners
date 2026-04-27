@@ -641,6 +641,10 @@ describe('createParentLivenessWatcher', () => {
 	})
 
 	test('registers a timer with .unref applied so it does not block the loop', () => {
+		// If unref were missing, this test process would hang for the interval
+		// duration after all other work completed. Use a long interval so the
+		// callback never fires during the test, and rely on bun:test exiting
+		// promptly as evidence that unref is in effect.
 		const handle = createParentLivenessWatcher({
 			initialPpid: 1234,
 			getPpid: () => 1234,

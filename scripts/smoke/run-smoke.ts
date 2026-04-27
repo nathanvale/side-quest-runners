@@ -528,6 +528,14 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 			})
 			try {
 				intermediate.kill('SIGKILL')
+				// Verify the intermediate is actually dead before measuring the
+				// runner's lifetime — otherwise a silently-failed SIGKILL would
+				// pass the alive-after-2s assertion for the wrong reason.
+				await intermediate.exited
+				assert(
+					!isProcessAlive(intermediate.pid as number),
+					`${runner.name}: intermediate process ${intermediate.pid} did not exit after SIGKILL`,
+				)
 				await new Promise((resolve) => setTimeout(resolve, 2000))
 				assert(
 					isProcessAlive(runnerPid),
