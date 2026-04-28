@@ -1217,9 +1217,95 @@ export async function createBiomeServer(
 }
 
 /**
+ * Default parent-liveness poll interval in milliseconds.
+ */
+export const DEFAULT_PARENT_CHECK_MS = 5000
+
+/**
+ * Lower bound for the poll interval to prevent event-loop saturation.
+ */
+export const MIN_PARENT_CHECK_MS = 50
+
+/**
+ * Parse the MCP_PARENT_CHECK_MS env value into a poll interval.
+ *
+ * Returns 0 to disable the watcher entirely. Otherwise returns the clamped
+ * positive interval. Unparseable / empty / NaN values fall back to the default.
+ */
+export function parseParentCheckMs(raw: string | undefined): number {
+	if (raw === undefined) {
+		return DEFAULT_PARENT_CHECK_MS
+	}
+	const trimmed = raw.trim()
+	if (trimmed === '') {
+		return DEFAULT_PARENT_CHECK_MS
+	}
+	const parsed = Number(trimmed)
+	if (!Number.isFinite(parsed)) {
+		return DEFAULT_PARENT_CHECK_MS
+	}
+	if (parsed <= 0) {
+		return 0
+	}
+	return Math.max(parsed, MIN_PARENT_CHECK_MS)
+}
+
+/**
+ * Watch for parent-process death and invoke onParentDeath when detected.
+ *
+ * On macOS the SDK's stdin EOF is unreliable when the parent is SIGKILLed,
+ * leaving the runner reparented to PID 1 and orphaned. Polling process.ppid
+ * is the simplest reliable backstop.
+ *
+ * The returned interval handle is unref()'d so it never keeps the event loop
+ * alive on its own. Returns undefined when the watcher is disabled.
+ */
+export function createParentLivenessWatcher(opts: {
+	initialPpid: number
+	getPpid: () => number
+	isParentAlive?: (pid: number) => boolean
+	onParentDeath: () => void
+	intervalMs: number
+}): ReturnType<typeof setInterval> | undefined {
+	if (opts.intervalMs <= 0) {
+		return undefined
+	}
+	const handle = setInterval(() => {
+		const current = opts.getPpid()
+		if (
+			current !== opts.initialPpid ||
+			opts.isParentAlive?.(opts.initialPpid) === false
+		) {
+			clearInterval(handle)
+			opts.onParentDeath()
+		}
+	}, opts.intervalMs)
+	handle.unref()
+	return handle
+}
+
+/**
+ * Check whether a process exists without sending it a real signal.
+ *
+ * Why: Bun's process.ppid can retain its startup value after reparenting, so
+ * the watcher also probes the original parent PID directly.
+ */
+export function isPidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0)
+		return true
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === 'EPERM'
+	}
+}
+
+/**
  * Start the stdio MCP server process.
  */
 export async function startBiomeServer(): Promise<void> {
+	// Capture before any await: if the parent dies during async init,
+	// process.ppid reparents to 1 and the original PID is lost.
+	const initialPpid = process.ppid
 	const server = await createBiomeServer()
 	const transport = new StdioServerTransport()
 	let shuttingDown = false
@@ -1238,8 +1324,15 @@ export async function startBiomeServer(): Promise<void> {
 				error: error instanceof Error ? error.message : String(error),
 			})
 		}
-		await server.close()
-		process.exit(0)
+		try {
+			await server.close()
+		} catch (error) {
+			lifecycleLogger.error('Failed to close biome-runner server cleanly', {
+				error: error instanceof Error ? error.message : String(error),
+			})
+		} finally {
+			process.exit(0)
+		}
 	}
 
 	transport.onclose = () => {
@@ -1255,6 +1348,21 @@ export async function startBiomeServer(): Promise<void> {
 	})
 	process.on('SIGTERM', () => {
 		void shutdown()
+	})
+
+	const intervalMs = parseParentCheckMs(process.env.MCP_PARENT_CHECK_MS)
+	createParentLivenessWatcher({
+		initialPpid,
+		getPpid: () => process.ppid,
+		isParentAlive: isPidAlive,
+		intervalMs,
+		onParentDeath: () => {
+			lifecycleLogger.info('Parent process gone, shutting down', {
+				initialPpid,
+				currentPpid: process.ppid,
+			})
+			void shutdown()
+		},
 	})
 }
 

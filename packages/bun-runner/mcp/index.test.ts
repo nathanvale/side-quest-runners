@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
@@ -8,7 +8,11 @@ import {
 	createBunCoverageInvocation,
 	createBunInvocation,
 	createBunServer,
+	createParentLivenessWatcher,
+	DEFAULT_PARENT_CHECK_MS,
 	extractTopStackFrame,
+	MIN_PARENT_CHECK_MS,
+	parseParentCheckMs,
 	SERVER_VERSION,
 	spawnWithTimeout,
 	validatePath,
@@ -541,6 +545,169 @@ describe('bun tools integration', () => {
 			).toBeDefined()
 		} finally {
 			await Promise.all([client.close(), server.close()])
+		}
+	})
+})
+
+describe('parseParentCheckMs', () => {
+	test('returns default when env is undefined', () => {
+		expect(parseParentCheckMs(undefined)).toBe(DEFAULT_PARENT_CHECK_MS)
+	})
+
+	test('returns default for empty / whitespace string', () => {
+		expect(parseParentCheckMs('')).toBe(DEFAULT_PARENT_CHECK_MS)
+		expect(parseParentCheckMs('   ')).toBe(DEFAULT_PARENT_CHECK_MS)
+	})
+
+	test('returns default for non-numeric / NaN values', () => {
+		expect(parseParentCheckMs('abc')).toBe(DEFAULT_PARENT_CHECK_MS)
+		expect(parseParentCheckMs('NaN')).toBe(DEFAULT_PARENT_CHECK_MS)
+	})
+
+	test('returns 0 (disabled) for zero', () => {
+		expect(parseParentCheckMs('0')).toBe(0)
+	})
+
+	test('returns 0 (disabled) for negative values', () => {
+		expect(parseParentCheckMs('-1')).toBe(0)
+		expect(parseParentCheckMs('-9999')).toBe(0)
+	})
+
+	test('clamps tiny positive values up to MIN_PARENT_CHECK_MS', () => {
+		expect(parseParentCheckMs('1')).toBe(MIN_PARENT_CHECK_MS)
+		expect(parseParentCheckMs('49')).toBe(MIN_PARENT_CHECK_MS)
+	})
+
+	test('passes through values at or above the minimum', () => {
+		expect(parseParentCheckMs('50')).toBe(50)
+		expect(parseParentCheckMs('200')).toBe(200)
+		expect(parseParentCheckMs('5000')).toBe(5000)
+	})
+})
+
+describe('createParentLivenessWatcher', () => {
+	test('returns undefined when intervalMs <= 0 (disabled)', () => {
+		const onParentDeath = () => {
+			throw new Error('should not be called')
+		}
+		expect(
+			createParentLivenessWatcher({
+				initialPpid: 1234,
+				getPpid: () => 1234,
+				onParentDeath,
+				intervalMs: 0,
+			}),
+		).toBeUndefined()
+		expect(
+			createParentLivenessWatcher({
+				initialPpid: 1234,
+				getPpid: () => 1234,
+				onParentDeath,
+				intervalMs: -1,
+			}),
+		).toBeUndefined()
+	})
+
+	test('calls .unref() on the timer handle so it does not block the loop', () => {
+		// Spy on the Timer prototype's unref so we observe the real call made
+		// by createParentLivenessWatcher. A timing-based assertion would still
+		// pass if unref() were silently removed, because clearInterval also
+		// lets bun:test exit promptly.
+		const probe = setInterval(() => {}, 60_000)
+		const timerProto = Object.getPrototypeOf(probe) as { unref: () => void }
+		clearInterval(probe)
+		const unrefSpy = spyOn(timerProto, 'unref')
+		try {
+			const handle = createParentLivenessWatcher({
+				initialPpid: 1234,
+				getPpid: () => 1234,
+				onParentDeath: () => {
+					throw new Error('should not be called when ppid unchanged')
+				},
+				intervalMs: 60_000,
+			})
+			expect(handle).toBeDefined()
+			expect(unrefSpy).toHaveBeenCalledTimes(1)
+			clearInterval(handle as ReturnType<typeof setInterval>)
+		} finally {
+			unrefSpy.mockRestore()
+		}
+	})
+
+	test('does not invoke onParentDeath while ppid is unchanged', async () => {
+		let calls = 0
+		const handle = createParentLivenessWatcher({
+			initialPpid: 1234,
+			getPpid: () => 1234,
+			onParentDeath: () => {
+				calls += 1
+			},
+			intervalMs: 50,
+		})
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 180))
+			expect(calls).toBe(0)
+		} finally {
+			clearInterval(handle as ReturnType<typeof setInterval>)
+		}
+	})
+
+	test('invokes onParentDeath once when ppid changes from initial', async () => {
+		let currentPpid = 1234
+		let calls = 0
+		const handle = createParentLivenessWatcher({
+			initialPpid: 1234,
+			getPpid: () => currentPpid,
+			onParentDeath: () => {
+				calls += 1
+			},
+			intervalMs: 50,
+		})
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 80))
+			expect(calls).toBe(0)
+			currentPpid = 1
+			await new Promise((resolve) => setTimeout(resolve, 180))
+			expect(calls).toBe(1)
+		} finally {
+			clearInterval(handle as ReturnType<typeof setInterval>)
+		}
+	})
+
+	test('invokes onParentDeath once when initial parent process is gone', async () => {
+		let calls = 0
+		const handle = createParentLivenessWatcher({
+			initialPpid: 1234,
+			getPpid: () => 1234,
+			isParentAlive: () => false,
+			onParentDeath: () => {
+				calls += 1
+			},
+			intervalMs: 50,
+		})
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 180))
+			expect(calls).toBe(1)
+		} finally {
+			clearInterval(handle as ReturnType<typeof setInterval>)
+		}
+	})
+
+	test('does not invoke onParentDeath when ppid starts and remains 1', async () => {
+		let calls = 0
+		const handle = createParentLivenessWatcher({
+			initialPpid: 1,
+			getPpid: () => 1,
+			onParentDeath: () => {
+				calls += 1
+			},
+			intervalMs: 50,
+		})
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 120))
+			expect(calls).toBe(0)
+		} finally {
+			clearInterval(handle as ReturnType<typeof setInterval>)
 		}
 	})
 })
