@@ -1303,6 +1303,9 @@ export function isPidAlive(pid: number): boolean {
  * Start the stdio MCP server process.
  */
 export async function startBiomeServer(): Promise<void> {
+	// Capture before any await: if the parent dies during async init,
+	// process.ppid reparents to 1 and the original PID is lost.
+	const initialPpid = process.ppid
 	const server = await createBiomeServer()
 	const transport = new StdioServerTransport()
 	let shuttingDown = false
@@ -1347,7 +1350,6 @@ export async function startBiomeServer(): Promise<void> {
 		void shutdown()
 	})
 
-	const initialPpid = process.ppid
 	const intervalMs = parseParentCheckMs(process.env.MCP_PARENT_CHECK_MS)
 	createParentLivenessWatcher({
 		initialPpid,

@@ -1224,6 +1224,9 @@ export function isPidAlive(pid: number): boolean {
  * Start the stdio MCP server process.
  */
 export async function startBunServer(): Promise<void> {
+	// Capture before any await: if the parent dies during async init,
+	// process.ppid reparents to 1 and the original PID is lost.
+	const initialPpid = process.ppid
 	const server = await createBunServer()
 	const transport = new StdioServerTransport()
 	let shuttingDown = false
@@ -1268,7 +1271,6 @@ export async function startBunServer(): Promise<void> {
 		void shutdown()
 	})
 
-	const initialPpid = process.ppid
 	const intervalMs = parseParentCheckMs(process.env.MCP_PARENT_CHECK_MS)
 	createParentLivenessWatcher({
 		initialPpid,

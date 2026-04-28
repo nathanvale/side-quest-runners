@@ -1191,6 +1191,9 @@ export function isPidAlive(pid: number): boolean {
  * Why: explicit lifecycle wiring keeps shutdown reliable in CLI-hosted runs.
  */
 export async function startTscServer(): Promise<void> {
+	// Capture before any await: if the parent dies during async init,
+	// process.ppid reparents to 1 and the original PID is lost.
+	const initialPpid = process.ppid
 	const server = await createTscServer()
 	const transport = new StdioServerTransport()
 	let shuttingDown = false
@@ -1235,7 +1238,6 @@ export async function startTscServer(): Promise<void> {
 		void shutdown()
 	})
 
-	const initialPpid = process.ppid
 	const intervalMs = parseParentCheckMs(process.env.MCP_PARENT_CHECK_MS)
 	createParentLivenessWatcher({
 		initialPpid,

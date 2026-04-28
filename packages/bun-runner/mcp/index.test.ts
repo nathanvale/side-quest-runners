@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
@@ -608,21 +608,30 @@ describe('createParentLivenessWatcher', () => {
 		).toBeUndefined()
 	})
 
-	test('registers a timer with .unref applied so it does not block the loop', () => {
-		// If unref were missing, this test process would hang for the interval
-		// duration after all other work completed. Use a long interval so the
-		// callback never fires during the test, and rely on bun:test exiting
-		// promptly as evidence that unref is in effect.
-		const handle = createParentLivenessWatcher({
-			initialPpid: 1234,
-			getPpid: () => 1234,
-			onParentDeath: () => {
-				throw new Error('should not be called when ppid unchanged')
-			},
-			intervalMs: 60_000,
-		})
-		expect(handle).toBeDefined()
-		clearInterval(handle as ReturnType<typeof setInterval>)
+	test('calls .unref() on the timer handle so it does not block the loop', () => {
+		// Spy on the Timer prototype's unref so we observe the real call made
+		// by createParentLivenessWatcher. A timing-based assertion would still
+		// pass if unref() were silently removed, because clearInterval also
+		// lets bun:test exit promptly.
+		const probe = setInterval(() => {}, 60_000)
+		const timerProto = Object.getPrototypeOf(probe) as { unref: () => void }
+		clearInterval(probe)
+		const unrefSpy = spyOn(timerProto, 'unref')
+		try {
+			const handle = createParentLivenessWatcher({
+				initialPpid: 1234,
+				getPpid: () => 1234,
+				onParentDeath: () => {
+					throw new Error('should not be called when ppid unchanged')
+				},
+				intervalMs: 60_000,
+			})
+			expect(handle).toBeDefined()
+			expect(unrefSpy).toHaveBeenCalledTimes(1)
+			clearInterval(handle as ReturnType<typeof setInterval>)
+		} finally {
+			unrefSpy.mockRestore()
+		}
 	})
 
 	test('does not invoke onParentDeath while ppid is unchanged', async () => {
