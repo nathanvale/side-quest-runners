@@ -496,7 +496,7 @@ describe('createParentLivenessWatcher', () => {
 		}
 	})
 
-	test('invokes onParentDeath when ppid changes from initial', async () => {
+	test('invokes onParentDeath once when ppid changes from initial', async () => {
 		let currentPpid = 1234
 		let calls = 0
 		const handle = createParentLivenessWatcher({
@@ -511,14 +511,33 @@ describe('createParentLivenessWatcher', () => {
 			await new Promise((resolve) => setTimeout(resolve, 80))
 			expect(calls).toBe(0)
 			currentPpid = 1
-			await new Promise((resolve) => setTimeout(resolve, 120))
-			expect(calls).toBeGreaterThanOrEqual(1)
+			await new Promise((resolve) => setTimeout(resolve, 180))
+			expect(calls).toBe(1)
 		} finally {
 			clearInterval(handle as ReturnType<typeof setInterval>)
 		}
 	})
 
-	test('invokes onParentDeath when ppid is 1 even if equal to initial (defensive)', async () => {
+	test('invokes onParentDeath once when initial parent process is gone', async () => {
+		let calls = 0
+		const handle = createParentLivenessWatcher({
+			initialPpid: 1234,
+			getPpid: () => 1234,
+			isParentAlive: () => false,
+			onParentDeath: () => {
+				calls += 1
+			},
+			intervalMs: 50,
+		})
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 180))
+			expect(calls).toBe(1)
+		} finally {
+			clearInterval(handle as ReturnType<typeof setInterval>)
+		}
+	})
+
+	test('does not invoke onParentDeath when ppid starts and remains 1', async () => {
 		let calls = 0
 		const handle = createParentLivenessWatcher({
 			initialPpid: 1,
@@ -530,7 +549,7 @@ describe('createParentLivenessWatcher', () => {
 		})
 		try {
 			await new Promise((resolve) => setTimeout(resolve, 120))
-			expect(calls).toBeGreaterThanOrEqual(1)
+			expect(calls).toBe(0)
 		} finally {
 			clearInterval(handle as ReturnType<typeof setInterval>)
 		}

@@ -1184,6 +1184,7 @@ export function parseParentCheckMs(raw: string | undefined): number {
 export function createParentLivenessWatcher(opts: {
 	initialPpid: number
 	getPpid: () => number
+	isParentAlive?: (pid: number) => boolean
 	onParentDeath: () => void
 	intervalMs: number
 }): ReturnType<typeof setInterval> | undefined {
@@ -1192,12 +1193,31 @@ export function createParentLivenessWatcher(opts: {
 	}
 	const handle = setInterval(() => {
 		const current = opts.getPpid()
-		if (current !== opts.initialPpid || current === 1) {
+		if (
+			current !== opts.initialPpid ||
+			opts.isParentAlive?.(opts.initialPpid) === false
+		) {
+			clearInterval(handle)
 			opts.onParentDeath()
 		}
 	}, opts.intervalMs)
 	handle.unref()
 	return handle
+}
+
+/**
+ * Check whether a process exists without sending it a real signal.
+ *
+ * Why: Bun's process.ppid can retain its startup value after reparenting, so
+ * the watcher also probes the original parent PID directly.
+ */
+export function isPidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0)
+		return true
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === 'EPERM'
+	}
 }
 
 /**
@@ -1246,6 +1266,7 @@ export async function startBunServer(): Promise<void> {
 	createParentLivenessWatcher({
 		initialPpid,
 		getPpid: () => process.ppid,
+		isParentAlive: isPidAlive,
 		intervalMs,
 		onParentDeath: () => {
 			lifecycleLogger.info('Parent process gone, shutting down', {

@@ -44,6 +44,7 @@ interface ProductionRunnerBinary {
 
 const REPO_ROOT = path.resolve(import.meta.dir, '..', '..')
 const TOOL_TIMEOUT_MS = 15_000
+const ORPHAN_RUNNER_STARTUP_SETTLE_MS = 500
 const PRODUCTION_RUNNER_BINARIES: ProductionRunnerBinary[] = [
 	{
 		name: 'tsc-runner',
@@ -394,14 +395,16 @@ async function spawnDetachedRunner(args: {
 	parentCheckMs: string
 }): Promise<{ intermediate: ReturnType<typeof Bun.spawn>; runnerPid: number }> {
 	const intermediateScript = `
-		const proc = Bun.spawn({
-			cmd: ['bun', process.env.RUNNER_ENTRY],
+		const { spawn } = require('node:child_process');
+		const proc = spawn('bun', [process.env.RUNNER_ENTRY], {
+			detached: true,
 			stdio: ['ignore', 'ignore', 'ignore'],
 			env: {
 				...process.env,
 				MCP_PARENT_CHECK_MS: process.env.MCP_PARENT_CHECK_MS,
 			},
 		});
+		proc.unref();
 		process.stdout.write(String(proc.pid) + '\\n');
 		// Idle forever; the parent harness kills this process.
 		setInterval(() => {}, 60_000);
@@ -480,6 +483,24 @@ function isProcessAlive(pid: number): boolean {
 	}
 }
 
+function killRunnerProcessGroup(pid: number): void {
+	try {
+		process.kill(-pid, 'SIGKILL')
+		return
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code
+		if (code === 'ESRCH') {
+			return
+		}
+	}
+
+	try {
+		process.kill(pid, 'SIGKILL')
+	} catch {
+		// Ignore: runner may have already exited.
+	}
+}
+
 async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
 	const deadline = Date.now() + timeoutMs
 	while (Date.now() < deadline) {
@@ -489,6 +510,12 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
 		await new Promise((resolve) => setTimeout(resolve, 50))
 	}
 	return false
+}
+
+async function waitForRunnerStartupSettle(): Promise<void> {
+	await new Promise((resolve) =>
+		setTimeout(resolve, ORPHAN_RUNNER_STARTUP_SETTLE_MS),
+	)
 }
 
 async function buildProductionRunnerBinaries(): Promise<void> {
@@ -524,6 +551,7 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 					isProcessAlive(runnerPid),
 					`${runner.name}: runner not alive after spawn`,
 				)
+				await waitForRunnerStartupSettle()
 				intermediate.kill('SIGKILL')
 				const exited = await waitForExit(runnerPid, 5000)
 				assert(
@@ -532,11 +560,7 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 				)
 			} finally {
 				if (isProcessAlive(runnerPid)) {
-					try {
-						process.kill(runnerPid, 'SIGKILL')
-					} catch {
-						// Ignore.
-					}
+					killRunnerProcessGroup(runnerPid)
 				}
 				try {
 					intermediate.kill('SIGKILL')
@@ -555,6 +579,7 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 				parentCheckMs: '0',
 			})
 			try {
+				await waitForRunnerStartupSettle()
 				intermediate.kill('SIGKILL')
 				// Verify the intermediate is actually dead before measuring the
 				// runner's lifetime — otherwise a silently-failed SIGKILL would
@@ -571,11 +596,7 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 				)
 			} finally {
 				if (isProcessAlive(runnerPid)) {
-					try {
-						process.kill(runnerPid, 'SIGKILL')
-					} catch {
-						// Ignore.
-					}
+					killRunnerProcessGroup(runnerPid)
 				}
 				try {
 					intermediate.kill('SIGKILL')
@@ -594,6 +615,7 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 				parentCheckMs: '10000',
 			})
 			try {
+				await waitForRunnerStartupSettle()
 				intermediate.kill('SIGKILL')
 				await new Promise((resolve) => setTimeout(resolve, 1000))
 				assert(
@@ -602,11 +624,7 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 				)
 			} finally {
 				if (isProcessAlive(runnerPid)) {
-					try {
-						process.kill(runnerPid, 'SIGKILL')
-					} catch {
-						// Ignore.
-					}
+					killRunnerProcessGroup(runnerPid)
 				}
 				try {
 					intermediate.kill('SIGKILL')
