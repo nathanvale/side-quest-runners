@@ -1242,8 +1242,15 @@ export async function startBunServer(): Promise<void> {
 				error: error instanceof Error ? error.message : String(error),
 			})
 		}
-		await server.close()
-		process.exit(0)
+		try {
+			await server.close()
+		} catch (error) {
+			lifecycleLogger.error('Failed to close bun-runner server cleanly', {
+				error: error instanceof Error ? error.message : String(error),
+			})
+		} finally {
+			process.exit(0)
+		}
 	}
 
 	transport.onclose = () => {
