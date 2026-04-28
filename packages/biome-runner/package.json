@@ -1,6 +1,6 @@
 {
 	"name": "@side-quest/biome-runner",
-	"version": "1.0.4",
+	"version": "1.0.5",
 	"description": "Biome linter & formatter MCP server — structured diagnostics for Claude Code",
 	"author": {
 		"name": "Nathan Vale",

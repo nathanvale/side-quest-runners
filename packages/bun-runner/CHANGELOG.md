@@ -1,5 +1,13 @@
 # @side-quest/bun-runner
 
+## 1.0.6
+
+### Patch Changes
+
+- [#68](https://github.com/nathanvale/side-quest-runners/pull/68) [`2ec594f`](https://github.com/nathanvale/side-quest-runners/commit/2ec594f8ed5ee63305eeba6b308a60be41906bda) Thanks [@nathanvale](https://github.com/nathanvale)! - Add parent-liveness watcher so MCP runners exit promptly when their parent Claude Code session (or sub-agent) dies without delivering SIGTERM. Previously, runners were reparented to PID 1 and persisted indefinitely, accumulating dozens of orphaned `bun` processes across a workday.
+
+  The watcher polls `process.ppid` every 5 seconds and triggers the existing graceful shutdown path when the parent disappears. The poll interval is configurable via the `MCP_PARENT_CHECK_MS` environment variable (set to `0` to disable; minimum effective value is 50ms).
+
 ## 1.0.5
 
 ### Patch Changes
