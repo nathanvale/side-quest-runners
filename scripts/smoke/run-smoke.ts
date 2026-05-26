@@ -46,9 +46,9 @@ interface ProductionRunnerBinary {
 const REPO_ROOT = path.resolve(import.meta.dir, '..', '..')
 const TOOL_TIMEOUT_MS = 15_000
 const ORPHAN_RUNNER_STARTUP_SETTLE_MS = 500
-const IDLE_SHUTDOWN_SMOKE_EXIT_MS = 1200
-const IDLE_SHUTDOWN_ACTIVITY_EXIT_MS = 1500
-const IDLE_SHUTDOWN_SMOKE_MARGIN_MS = 250
+const IDLE_SHUTDOWN_SMOKE_EXIT_MS = 2500
+const IDLE_SHUTDOWN_ACTIVITY_EXIT_MS = 3000
+const IDLE_SHUTDOWN_SMOKE_MARGIN_MS = 500
 const IDLE_SHUTDOWN_DISABLED_OBSERVATION_MS =
 	Math.max(IDLE_SHUTDOWN_SMOKE_EXIT_MS, IDLE_SHUTDOWN_ACTIVITY_EXIT_MS) +
 	IDLE_SHUTDOWN_SMOKE_MARGIN_MS
@@ -832,10 +832,20 @@ async function runIdleShutdownSmoke(_sandboxRoot: string): Promise<void> {
 						isProcessAlive(runnerPid),
 						`${runner.name}: stdio runner not alive after connect`,
 					)
-					await new Promise((resolve) => setTimeout(resolve, idleExitMs / 2))
-					await callIdleActivityTool(runner.name, client)
 					await new Promise((resolve) =>
-						setTimeout(resolve, Math.floor(idleExitMs * 0.7)),
+						setTimeout(resolve, Math.floor(idleExitMs / 2)),
+					)
+					const activityStartedAt = Date.now()
+					await callIdleActivityTool(runner.name, client)
+					const elapsedSinceActivityStart = Date.now() - activityStartedAt
+					const beforeDeadlineWaitMs = Math.max(
+						0,
+						idleExitMs -
+							elapsedSinceActivityStart -
+							IDLE_SHUTDOWN_SMOKE_MARGIN_MS,
+					)
+					await new Promise((resolve) =>
+						setTimeout(resolve, beforeDeadlineWaitMs),
 					)
 					assert(
 						isProcessAlive(runnerPid),
