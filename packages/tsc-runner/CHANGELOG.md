@@ -1,5 +1,20 @@
 # @side-quest/tsc-runner
 
+## 2.0.0
+
+### Major Changes
+
+- [#77](https://github.com/nathanvale/side-quest-runners/pull/77) [`79f8a49`](https://github.com/nathanvale/side-quest-runners/commit/79f8a49d06d6b8a43e4c896fd1fc78dd15d26529) Thanks [@nathanvale](https://github.com/nathanvale)! - Add default-on idle shutdown for retained MCP runner processes.
+
+  Runners now exit after 15 minutes without tracked activity even when an app host
+  keeps the parent process and stdio pipes alive. Tracked activity includes tool
+  calls and logging-level requests such as `logging/setLevel`. The timeout is
+  configurable via `MCP_IDLE_EXIT_MS`, with `0` disabling the idle shutdown
+  backstop.
+
+  Breaking change: retained clients that relied on an idle runner staying alive
+  indefinitely should set `MCP_IDLE_EXIT_MS=0` to preserve that previous behavior.
+
 ## 1.0.5
 
 ### Patch Changes
