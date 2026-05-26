@@ -19,6 +19,7 @@ interface RunnerCase {
 		| 'biome-runner'
 		| 'claude-hooks'
 		| 'orphan-detection'
+		| 'idle-shutdown'
 	entrypoint: string
 	run(sandboxRoot: string): Promise<void>
 }
@@ -45,6 +46,12 @@ interface ProductionRunnerBinary {
 const REPO_ROOT = path.resolve(import.meta.dir, '..', '..')
 const TOOL_TIMEOUT_MS = 15_000
 const ORPHAN_RUNNER_STARTUP_SETTLE_MS = 500
+const IDLE_SHUTDOWN_SMOKE_EXIT_MS = 2500
+const IDLE_SHUTDOWN_ACTIVITY_EXIT_MS = 3000
+const IDLE_SHUTDOWN_SMOKE_MARGIN_MS = 500
+const IDLE_SHUTDOWN_DISABLED_OBSERVATION_MS =
+	Math.max(IDLE_SHUTDOWN_SMOKE_EXIT_MS, IDLE_SHUTDOWN_ACTIVITY_EXIT_MS) +
+	IDLE_SHUTDOWN_SMOKE_MARGIN_MS
 const PRODUCTION_RUNNER_BINARIES: ProductionRunnerBinary[] = [
 	{
 		name: 'tsc-runner',
@@ -92,19 +99,21 @@ async function createSandboxRoot(prefix: string): Promise<string> {
 async function withRunnerClient<T>(args: {
 	entrypoint: string
 	cwd: string
-	run: (client: Client) => Promise<T>
+	env?: Record<string, string>
+	run: (client: Client, transport: StdioClientTransport) => Promise<T>
 }): Promise<T> {
 	const client = new Client({ name: 'smoke-client', version: '0.0.1' })
 	const transport = new StdioClientTransport({
 		command: 'bun',
 		args: [args.entrypoint],
 		cwd: args.cwd,
+		env: args.env,
 		stderr: 'pipe',
 	})
 
 	try {
 		await client.connect(transport)
-		return await args.run(client)
+		return await args.run(client, transport)
 	} finally {
 		try {
 			await client.close()
@@ -382,26 +391,30 @@ async function runBiomeSmoke(sandboxRoot: string): Promise<void> {
 }
 
 /**
- * Spawn an intermediate process that itself spawns the runner binary with
- * fully detached stdio. Returns the intermediate's process handle and the
- * runner's PID (read from the intermediate's stdout).
+ * Spawn an intermediate process that itself spawns the runner binary and keeps
+ * ownership of the runner's stdio. Returns the intermediate handle and runner
+ * PID (read from the intermediate's stdout).
  *
- * Detached stdio is load-bearing: it ensures killing the intermediate does
- * not close the runner's stdin, so transport.onclose does not fire and the
- * watcher is the only mechanism that can trigger shutdown.
+ * For orphan detection, ignored stdio ensures killing the intermediate does not
+ * close stdin. For idle shutdown, piped stdio keeps parent-owned pipes open
+ * while the runner ages out with no useful activity.
  */
 async function spawnDetachedRunner(args: {
 	runnerEntry: string
 	parentCheckMs: string
+	idleExitMs?: string
+	stdioMode?: 'ignore' | 'pipe'
 }): Promise<{ intermediate: ReturnType<typeof Bun.spawn>; runnerPid: number }> {
 	const intermediateScript = `
 		const { spawn } = require('node:child_process');
+		const stdioMode = process.env.RUNNER_STDIO_MODE === 'pipe' ? 'pipe' : 'ignore';
 		const proc = spawn('bun', [process.env.RUNNER_ENTRY], {
 			detached: true,
-			stdio: ['ignore', 'ignore', 'ignore'],
+			stdio: [stdioMode, stdioMode, stdioMode],
 			env: {
 				...process.env,
 				MCP_PARENT_CHECK_MS: process.env.MCP_PARENT_CHECK_MS,
+				MCP_IDLE_EXIT_MS: process.env.MCP_IDLE_EXIT_MS,
 			},
 		});
 		proc.unref();
@@ -417,6 +430,8 @@ async function spawnDetachedRunner(args: {
 			...process.env,
 			RUNNER_ENTRY: args.runnerEntry,
 			MCP_PARENT_CHECK_MS: args.parentCheckMs,
+			MCP_IDLE_EXIT_MS: args.idleExitMs ?? '0',
+			RUNNER_STDIO_MODE: args.stdioMode ?? 'ignore',
 		},
 	})
 
@@ -518,7 +533,14 @@ async function waitForRunnerStartupSettle(): Promise<void> {
 	)
 }
 
+let productionRunnerBuildPromise: Promise<void> | undefined
+
 async function buildProductionRunnerBinaries(): Promise<void> {
+	productionRunnerBuildPromise ??= buildProductionRunnerBinariesOnce()
+	return productionRunnerBuildPromise
+}
+
+async function buildProductionRunnerBinariesOnce(): Promise<void> {
 	console.log('[smoke] building production runner binaries...')
 
 	for (const runner of PRODUCTION_RUNNER_BINARIES) {
@@ -536,6 +558,93 @@ async function buildProductionRunnerBinaries(): Promise<void> {
 	}
 }
 
+function createSmokeEnv(
+	overrides: Record<string, string>,
+): Record<string, string> {
+	const env: Record<string, string> = {}
+	for (const [key, value] of Object.entries(process.env)) {
+		if (typeof value === 'string') {
+			env[key] = value
+		}
+	}
+	return { ...env, ...overrides }
+}
+
+async function writeIdleActivityFixture(
+	runnerName: ProductionRunnerBinary['name'],
+	projectDir: string,
+): Promise<void> {
+	switch (runnerName) {
+		case 'tsc-runner':
+			await writeFile(
+				path.join(projectDir, 'tsconfig.json'),
+				JSON.stringify(
+					{
+						compilerOptions: {
+							target: 'ES2022',
+							module: 'NodeNext',
+							moduleResolution: 'NodeNext',
+							strict: true,
+							noEmit: true,
+							skipLibCheck: true,
+							types: [],
+						},
+					},
+					null,
+					2,
+				),
+			)
+			await writeFile(path.join(projectDir, 'index.ts'), 'const ok = 1;\n')
+			return
+		case 'bun-runner':
+			await writeFile(
+				path.join(projectDir, 'pass.test.ts'),
+				"import { expect, test } from 'bun:test';\ntest('pass', () => expect(1 + 1).toBe(2));\n",
+			)
+			return
+		case 'biome-runner':
+			await writeFile(path.join(projectDir, 'good.js'), 'const ok = 1\n')
+			return
+	}
+}
+
+async function callIdleActivityTool(
+	runnerName: ProductionRunnerBinary['name'],
+	client: Client,
+): Promise<void> {
+	switch (runnerName) {
+		case 'tsc-runner': {
+			const result = await callTool(client, 'tsc_check', {
+				path: '.',
+				response_format: 'json',
+			})
+			assert(result.isError === false, 'tsc_check failed during idle activity')
+			return
+		}
+		case 'bun-runner': {
+			const result = await callTool(client, 'bun_testCoverage', {
+				response_format: 'json',
+			})
+			assert(
+				result.isError === false,
+				'bun_testCoverage failed during idle activity',
+			)
+			return
+		}
+		case 'biome-runner': {
+			const result = await callTool(client, 'biome_formatCheck', {
+				path: '.',
+				response_format: 'json',
+			})
+			assert(
+				result.isError === false,
+				'biome_formatCheck failed during idle activity',
+			)
+			return
+		}
+	}
+}
+
 async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 	await buildProductionRunnerBinaries()
 
@@ -545,6 +654,7 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 			const { intermediate, runnerPid } = await spawnDetachedRunner({
 				runnerEntry: runner.entrypoint,
 				parentCheckMs: '200',
+				idleExitMs: '0',
 			})
 			try {
 				assert(
@@ -577,6 +687,7 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 			const { intermediate, runnerPid } = await spawnDetachedRunner({
 				runnerEntry: runner.entrypoint,
 				parentCheckMs: '0',
+				idleExitMs: '0',
 			})
 			try {
 				await waitForRunnerStartupSettle()
@@ -613,6 +724,7 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 			const { intermediate, runnerPid } = await spawnDetachedRunner({
 				runnerEntry: runner.entrypoint,
 				parentCheckMs: '10000',
+				idleExitMs: '0',
 			})
 			try {
 				await waitForRunnerStartupSettle()
@@ -621,6 +733,153 @@ async function runOrphanDetectionSmoke(_sandboxRoot: string): Promise<void> {
 				assert(
 					isProcessAlive(runnerPid),
 					`${runner.name}: with MCP_PARENT_CHECK_MS=10000, runner ${runnerPid} exited within 1s — interval is not honored`,
+				)
+			} finally {
+				if (isProcessAlive(runnerPid)) {
+					killRunnerProcessGroup(runnerPid)
+				}
+				try {
+					intermediate.kill('SIGKILL')
+				} catch {
+					// Ignore.
+				}
+				await intermediate.exited.catch(() => {})
+			}
+		}
+	}
+}
+
+async function runIdleShutdownSmoke(_sandboxRoot: string): Promise<void> {
+	await buildProductionRunnerBinaries()
+
+	for (const runner of PRODUCTION_RUNNER_BINARIES) {
+		// Happy path: parent and stdio pipes stay alive, but idle timeout exits.
+		{
+			const idleExitMs = IDLE_SHUTDOWN_SMOKE_EXIT_MS
+			const { intermediate, runnerPid } = await spawnDetachedRunner({
+				runnerEntry: runner.entrypoint,
+				parentCheckMs: '0',
+				idleExitMs: String(idleExitMs),
+				stdioMode: 'pipe',
+			})
+			try {
+				assert(
+					isProcessAlive(runnerPid),
+					`${runner.name}: runner not alive after spawn`,
+				)
+				await waitForRunnerStartupSettle()
+				assert(
+					isProcessAlive(runnerPid),
+					`${runner.name}: runner ${runnerPid} exited before the ${idleExitMs}ms idle deadline`,
+				)
+				const preDeadlineWindowMs = Math.max(
+					0,
+					idleExitMs -
+						ORPHAN_RUNNER_STARTUP_SETTLE_MS -
+						IDLE_SHUTDOWN_SMOKE_MARGIN_MS,
+				)
+				const exitedBeforeDeadline = await waitForExit(
+					runnerPid,
+					preDeadlineWindowMs,
+				)
+				assert(
+					!exitedBeforeDeadline,
+					`${runner.name}: runner ${runnerPid} exited before the ${idleExitMs}ms idle deadline`,
+				)
+				assert(
+					isProcessAlive(intermediate.pid as number),
+					`${runner.name}: intermediate process ${intermediate.pid} unexpectedly exited before idle assertion`,
+				)
+				const exited = await waitForExit(runnerPid, 5000)
+				assert(
+					exited,
+					`${runner.name}: runner ${runnerPid} did not exit within 5s while parent and stdio pipes stayed open (idle shutdown should have fired)`,
+				)
+			} finally {
+				if (isProcessAlive(runnerPid)) {
+					killRunnerProcessGroup(runnerPid)
+				}
+				try {
+					intermediate.kill('SIGKILL')
+				} catch {
+					// Ignore.
+				}
+				await intermediate.exited.catch(() => {})
+			}
+		}
+
+		// Real stdio request: tool activity resets the idle deadline in the built binary.
+		{
+			const idleExitMs = IDLE_SHUTDOWN_ACTIVITY_EXIT_MS
+			const projectDir = path.join(
+				_sandboxRoot,
+				`${runner.name}-idle-activity-project`,
+			)
+			await mkdir(projectDir, { recursive: true })
+			await writeIdleActivityFixture(runner.name, projectDir)
+
+			await withRunnerClient({
+				entrypoint: runner.entrypoint,
+				cwd: projectDir,
+				env: createSmokeEnv({
+					MCP_PARENT_CHECK_MS: '0',
+					MCP_IDLE_EXIT_MS: String(idleExitMs),
+				}),
+				run: async (client, transport) => {
+					const runnerPid = transport.pid
+					assert(runnerPid, `${runner.name}: missing stdio runner pid`)
+					assert(
+						isProcessAlive(runnerPid),
+						`${runner.name}: stdio runner not alive after connect`,
+					)
+					await new Promise((resolve) =>
+						setTimeout(resolve, Math.floor(idleExitMs / 2)),
+					)
+					const activityStartedAt = Date.now()
+					await callIdleActivityTool(runner.name, client)
+					const elapsedSinceActivityStart = Date.now() - activityStartedAt
+					const beforeDeadlineWaitMs = Math.max(
+						0,
+						idleExitMs -
+							elapsedSinceActivityStart -
+							IDLE_SHUTDOWN_SMOKE_MARGIN_MS,
+					)
+					await new Promise((resolve) =>
+						setTimeout(resolve, beforeDeadlineWaitMs),
+					)
+					assert(
+						isProcessAlive(runnerPid),
+						`${runner.name}: runner exited before the request-rescheduled idle deadline`,
+					)
+					const exited = await waitForExit(runnerPid, 3000)
+					assert(
+						exited,
+						`${runner.name}: runner ${runnerPid} did not exit after rescheduled idle deadline`,
+					)
+				},
+			})
+		}
+
+		// Negative control: idle disabled — retained runner stays alive.
+		{
+			const { intermediate, runnerPid } = await spawnDetachedRunner({
+				runnerEntry: runner.entrypoint,
+				parentCheckMs: '0',
+				idleExitMs: '0',
+				stdioMode: 'pipe',
+			})
+			try {
+				await waitForRunnerStartupSettle()
+				await new Promise((resolve) =>
+					setTimeout(resolve, IDLE_SHUTDOWN_DISABLED_OBSERVATION_MS),
+				)
+				assert(
+					isProcessAlive(intermediate.pid as number),
+					`${runner.name}: intermediate process ${intermediate.pid} unexpectedly exited before idle negative control`,
+				)
+				assert(
+					isProcessAlive(runnerPid),
+					`${runner.name}: with MCP_IDLE_EXIT_MS=0, runner ${runnerPid} unexpectedly exited within ${IDLE_SHUTDOWN_DISABLED_OBSERVATION_MS}ms — retained-parent test is no longer trustworthy`,
 				)
 			} finally {
 				if (isProcessAlive(runnerPid)) {
@@ -743,6 +1002,13 @@ async function run(): Promise<void> {
 			// dist/ binaries internally.
 			entrypoint: path.join(REPO_ROOT, 'packages/bun-runner/dist/index.js'),
 			run: runOrphanDetectionSmoke,
+		},
+		{
+			name: 'idle-shutdown',
+			// Entrypoint is informational here — the case loops over all three
+			// dist/ binaries internally.
+			entrypoint: path.join(REPO_ROOT, 'packages/bun-runner/dist/index.js'),
+			run: runIdleShutdownSmoke,
 		},
 	]
 

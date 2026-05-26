@@ -114,6 +114,11 @@ interface ObservabilityState {
 
 interface BunServerOptions {
 	stderrStream?: WritableStream
+	onRequestStart?: () => () => void
+}
+
+function startRequestActivity(options?: BunServerOptions): () => void {
+	return options?.onRequestStart?.() ?? (() => {})
 }
 
 async function collectStreamText(
@@ -941,11 +946,16 @@ export async function createBunServer(
 	server.server.setRequestHandler(
 		SetLevelRequestSchema,
 		async (request): Promise<Record<string, never>> => {
-			observabilityState.clientMcpLogLevel = request.params.level
-			runTestsLogger.info('Updated MCP logging level', {
-				mcpLevel: request.params.level,
-			})
-			return {}
+			const finishRequest = startRequestActivity(options)
+			try {
+				observabilityState.clientMcpLogLevel = request.params.level
+				runTestsLogger.info('Updated MCP logging level', {
+					mcpLevel: request.params.level,
+				})
+				return {}
+			} finally {
+				finishRequest()
+			}
 		},
 	)
 
@@ -978,42 +988,47 @@ export async function createBunServer(
 			},
 		},
 		async (args, extra): Promise<CallToolResult> => {
-			return withContext(
-				{
-					requestId: String(extra.requestId),
-					tool: 'bun_runTests',
-				},
-				async () => {
-					try {
-						const pattern = args.pattern
-						if (pattern) {
-							validateShellSafePattern(pattern)
-							if (pattern.includes('/') || pattern.includes('..')) {
-								await validatePath(pattern)
+			const finishRequest = startRequestActivity(options)
+			try {
+				return await withContext(
+					{
+						requestId: String(extra.requestId),
+						tool: 'bun_runTests',
+					},
+					async () => {
+						try {
+							const pattern = args.pattern
+							if (pattern) {
+								validateShellSafePattern(pattern)
+								if (pattern.includes('/') || pattern.includes('..')) {
+									await validatePath(pattern)
+								}
 							}
-						}
 
-						const summary = await runBunTests(pattern)
-						const format = args.response_format ?? 'json'
-						runTestsLogger.info('bun_runTests completed', {
-							passed: summary.passed,
-							failed: summary.failed,
-							total: summary.total,
-						})
-						return createToolSuccess(
-							formatTestSummary(summary, format),
-							summary,
-						)
-					} catch (error) {
-						const failure = toToolFailure(error)
-						runTestsLogger.error('bun_runTests failed', {
-							code: failure.code,
-							message: failure.message,
-						})
-						return createToolFailure(failure)
-					}
-				},
-			)
+							const summary = await runBunTests(pattern)
+							const format = args.response_format ?? 'json'
+							runTestsLogger.info('bun_runTests completed', {
+								passed: summary.passed,
+								failed: summary.failed,
+								total: summary.total,
+							})
+							return createToolSuccess(
+								formatTestSummary(summary, format),
+								summary,
+							)
+						} catch (error) {
+							const failure = toToolFailure(error)
+							runTestsLogger.error('bun_runTests failed', {
+								code: failure.code,
+								message: failure.message,
+							})
+							return createToolFailure(failure)
+						}
+					},
+				)
+			} finally {
+				finishRequest()
+			}
 		},
 	)
 
@@ -1043,36 +1058,41 @@ export async function createBunServer(
 			},
 		},
 		async (args, extra): Promise<CallToolResult> => {
-			return withContext(
-				{
-					requestId: String(extra.requestId),
-					tool: 'bun_testFile',
-				},
-				async () => {
-					try {
-						const validatedFile = await validatePath(args.file)
-						const summary = await runBunTests(validatedFile)
-						const format = args.response_format ?? 'json'
-						testFileLogger.info('bun_testFile completed', {
-							file: args.file,
-							passed: summary.passed,
-							failed: summary.failed,
-						})
-						return createToolSuccess(
-							formatTestSummary(summary, format, args.file),
-							summary,
-						)
-					} catch (error) {
-						const failure = toToolFailure(error)
-						testFileLogger.error('bun_testFile failed', {
-							code: failure.code,
-							message: failure.message,
-							file: args.file,
-						})
-						return createToolFailure(failure)
-					}
-				},
-			)
+			const finishRequest = startRequestActivity(options)
+			try {
+				return await withContext(
+					{
+						requestId: String(extra.requestId),
+						tool: 'bun_testFile',
+					},
+					async () => {
+						try {
+							const validatedFile = await validatePath(args.file)
+							const summary = await runBunTests(validatedFile)
+							const format = args.response_format ?? 'json'
+							testFileLogger.info('bun_testFile completed', {
+								file: args.file,
+								passed: summary.passed,
+								failed: summary.failed,
+							})
+							return createToolSuccess(
+								formatTestSummary(summary, format, args.file),
+								summary,
+							)
+						} catch (error) {
+							const failure = toToolFailure(error)
+							testFileLogger.error('bun_testFile failed', {
+								code: failure.code,
+								message: failure.message,
+								file: args.file,
+							})
+							return createToolFailure(failure)
+						}
+					},
+				)
+			} finally {
+				finishRequest()
+			}
 		},
 	)
 
@@ -1098,34 +1118,39 @@ export async function createBunServer(
 			},
 		},
 		async (args, extra): Promise<CallToolResult> => {
-			return withContext(
-				{
-					requestId: String(extra.requestId),
-					tool: 'bun_testCoverage',
-				},
-				async () => {
-					try {
-						const result = await runBunTestCoverage()
-						const format = args.response_format ?? 'json'
-						coverageLogger.info('bun_testCoverage completed', {
-							failed: result.summary.failed,
-							passed: result.summary.passed,
-							coveragePercent: result.coverage.percent,
-						})
-						return createToolSuccess(
-							formatCoverageResult(result, format),
-							result,
-						)
-					} catch (error) {
-						const failure = toToolFailure(error)
-						coverageLogger.error('bun_testCoverage failed', {
-							code: failure.code,
-							message: failure.message,
-						})
-						return createToolFailure(failure)
-					}
-				},
-			)
+			const finishRequest = startRequestActivity(options)
+			try {
+				return await withContext(
+					{
+						requestId: String(extra.requestId),
+						tool: 'bun_testCoverage',
+					},
+					async () => {
+						try {
+							const result = await runBunTestCoverage()
+							const format = args.response_format ?? 'json'
+							coverageLogger.info('bun_testCoverage completed', {
+								failed: result.summary.failed,
+								passed: result.summary.passed,
+								coveragePercent: result.coverage.percent,
+							})
+							return createToolSuccess(
+								formatCoverageResult(result, format),
+								result,
+							)
+						} catch (error) {
+							const failure = toToolFailure(error)
+							coverageLogger.error('bun_testCoverage failed', {
+								code: failure.code,
+								message: failure.message,
+							})
+							return createToolFailure(failure)
+						}
+					},
+				)
+			} finally {
+				finishRequest()
+			}
 		},
 	)
 
@@ -1146,6 +1171,16 @@ export const DEFAULT_PARENT_CHECK_MS = 5000
  * Lower bound for the poll interval to prevent event-loop saturation.
  */
 export const MIN_PARENT_CHECK_MS = 50
+
+/**
+ * Default idle shutdown interval in milliseconds.
+ */
+export const DEFAULT_IDLE_EXIT_MS = 900_000
+
+/**
+ * Lower bound for the idle interval to prevent event-loop saturation.
+ */
+export const MIN_IDLE_EXIT_MS = 50
 
 /**
  * Parse the MCP_PARENT_CHECK_MS env value into a poll interval.
@@ -1169,6 +1204,30 @@ export function parseParentCheckMs(raw: string | undefined): number {
 		return 0
 	}
 	return Math.max(parsed, MIN_PARENT_CHECK_MS)
+}
+
+/**
+ * Parse the MCP_IDLE_EXIT_MS env value into an idle shutdown interval.
+ *
+ * Returns 0 to disable idle shutdown. Otherwise returns the clamped positive
+ * interval. Unparseable / empty / NaN values fall back to the default.
+ */
+export function parseIdleExitMs(raw: string | undefined): number {
+	if (raw === undefined) {
+		return DEFAULT_IDLE_EXIT_MS
+	}
+	const trimmed = raw.trim()
+	if (trimmed === '') {
+		return DEFAULT_IDLE_EXIT_MS
+	}
+	const parsed = Number(trimmed)
+	if (!Number.isFinite(parsed)) {
+		return DEFAULT_IDLE_EXIT_MS
+	}
+	if (parsed <= 0) {
+		return 0
+	}
+	return Math.max(parsed, MIN_IDLE_EXIT_MS)
 }
 
 /**
@@ -1206,6 +1265,109 @@ export function createParentLivenessWatcher(opts: {
 }
 
 /**
+ * Watch for inactivity and invoke onIdle when no tracked activity is in flight.
+ *
+ * This is a backstop for app-hosted clients that keep the parent process and
+ * stdio pipes open after a session is abandoned. Tracked activity currently
+ * covers tool calls and logging/setLevel requests.
+ */
+export function createIdleShutdownWatcher(opts: {
+	idleMs: number
+	onIdle: () => void
+}):
+	| {
+			recordRequestStart: () => () => void
+			stop: () => void
+	  }
+	| undefined {
+	if (opts.idleMs <= 0) {
+		return undefined
+	}
+
+	let activeRequests = 0
+	let stopped = false
+	let handle: ReturnType<typeof setTimeout> | undefined
+
+	const clear = () => {
+		if (handle) {
+			clearTimeout(handle)
+			handle = undefined
+		}
+	}
+
+	const schedule = () => {
+		clear()
+		if (stopped || activeRequests > 0) {
+			return
+		}
+		handle = setTimeout(() => {
+			handle = undefined
+			if (stopped || activeRequests > 0) {
+				return
+			}
+			stopped = true
+			opts.onIdle()
+		}, opts.idleMs)
+		handle.unref()
+	}
+
+	schedule()
+
+	return {
+		recordRequestStart: () => {
+			if (stopped) {
+				return () => {}
+			}
+			activeRequests += 1
+			clear()
+			let finished = false
+			return () => {
+				if (finished) {
+					return
+				}
+				finished = true
+				activeRequests = Math.max(0, activeRequests - 1)
+				schedule()
+			}
+		},
+		stop: () => {
+			stopped = true
+			clear()
+		},
+	}
+}
+
+interface IdleExitEnv {
+	readonly [key: string]: string | undefined
+	MCP_IDLE_EXIT_MS?: string | undefined
+}
+
+/**
+ * Create idle shutdown wiring from process-style environment values.
+ *
+ * Why: startBunServer should exercise the same default-on / disabled parsing
+ * as unit tests without making runtime smoke wait for the 15-minute default.
+ */
+export function createIdleShutdownWatcherFromEnv(opts: {
+	env: IdleExitEnv
+	onIdle: (idleMs: number) => void
+	createWatcher?: typeof createIdleShutdownWatcher
+}): {
+	idleMs: number
+	watcher: ReturnType<typeof createIdleShutdownWatcher>
+} {
+	const idleMs = parseIdleExitMs(opts.env.MCP_IDLE_EXIT_MS)
+	const createWatcher = opts.createWatcher ?? createIdleShutdownWatcher
+	return {
+		idleMs,
+		watcher: createWatcher({
+			idleMs,
+			onIdle: () => opts.onIdle(idleMs),
+		}),
+	}
+}
+
+/**
  * Check whether a process exists without sending it a real signal.
  *
  * Why: Bun's process.ppid can retain its startup value after reparenting, so
@@ -1227,7 +1389,10 @@ export async function startBunServer(): Promise<void> {
 	// Capture before any await: if the parent dies during async init,
 	// process.ppid reparents to 1 and the original PID is lost.
 	const initialPpid = process.ppid
-	const server = await createBunServer()
+	let idleWatcher: ReturnType<typeof createIdleShutdownWatcher> | undefined
+	const server = await createBunServer({
+		onRequestStart: () => idleWatcher?.recordRequestStart() ?? (() => {}),
+	})
 	const transport = new StdioServerTransport()
 	let shuttingDown = false
 	const lifecycleLogger = getLogger(['mcp', 'lifecycle'])
@@ -1237,6 +1402,7 @@ export async function startBunServer(): Promise<void> {
 			return
 		}
 		shuttingDown = true
+		idleWatcher?.stop()
 		lifecycleLogger.info('Shutting down bun-runner server')
 		try {
 			await dispose()
@@ -1259,6 +1425,17 @@ export async function startBunServer(): Promise<void> {
 	transport.onclose = () => {
 		void shutdown()
 	}
+
+	const idleShutdown = createIdleShutdownWatcherFromEnv({
+		env: process.env,
+		onIdle: (idleMs) => {
+			lifecycleLogger.info('Idle timeout reached, shutting down', {
+				idleMs,
+			})
+			void shutdown()
+		},
+	})
+	idleWatcher = idleShutdown.watcher
 
 	await server.connect(transport)
 	lifecycleLogger.info('bun-runner server connected to stdio transport')
