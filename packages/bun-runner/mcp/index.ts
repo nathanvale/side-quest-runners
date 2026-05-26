@@ -10,7 +10,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { readFileSync } from 'node:fs'
-import { realpath } from 'node:fs/promises'
+import { realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
 import {
 	configure,
@@ -182,7 +182,7 @@ const failureSchema: z.ZodObject<{
 	stack: z.string().optional().nullable(),
 })
 
-const testSummarySchema: z.ZodObject<{
+const testSummaryCoreSchema: z.ZodObject<{
 	passed: z.ZodNumber
 	failed: z.ZodNumber
 	total: z.ZodNumber
@@ -194,6 +194,10 @@ const testSummarySchema: z.ZodObject<{
 	failures: z.array(failureSchema),
 })
 
+const testSummarySchema = testSummaryCoreSchema.extend({
+	cwd: z.string(),
+})
+
 const coverageFileSchema: z.ZodObject<{
 	file: z.ZodString
 	percent: z.ZodNumber
@@ -203,13 +207,15 @@ const coverageFileSchema: z.ZodObject<{
 })
 
 const testCoverageSchema: z.ZodObject<{
-	summary: typeof testSummarySchema
+	cwd: z.ZodString
+	summary: typeof testSummaryCoreSchema
 	coverage: z.ZodObject<{
 		percent: z.ZodNumber
 		uncovered: z.ZodArray<typeof coverageFileSchema>
 	}>
 }> = z.object({
-	summary: testSummarySchema,
+	cwd: z.string(),
+	summary: testSummaryCoreSchema,
 	coverage: z.object({
 		percent: z.number(),
 		uncovered: z.array(coverageFileSchema),
@@ -228,6 +234,19 @@ const PACKAGE_VERSION: string = JSON.parse(
 export const SERVER_VERSION: string = PACKAGE_VERSION
 
 let _gitRootPromise: Promise<string> | null = null
+let _repositoryContextPromise: Promise<RepositoryContext> | null = null
+
+interface RepositoryContext {
+	worktreeRoot: string
+	gitCommonDir: string
+}
+
+interface PathContext {
+	realPath: string
+	worktreeRoot: string
+	startupRoot: string
+	gitCommonDir: string
+}
 
 /**
  * Get the git root once per process using promise coalescing.
@@ -239,12 +258,36 @@ export function getGitRoot(): Promise<string> {
 	if (_gitRootPromise !== null) {
 		return _gitRootPromise
 	}
-	_gitRootPromise = resolveGitRoot()
+	_gitRootPromise = getStartupRepositoryContext().then(
+		(context) => context.worktreeRoot,
+	)
 	return _gitRootPromise
 }
 
-async function resolveGitRoot(): Promise<string> {
-	const proc = Bun.spawn(['git', 'rev-parse', '--show-toplevel'], {
+async function getStartupRepositoryContext(): Promise<RepositoryContext> {
+	if (_repositoryContextPromise !== null) {
+		return _repositoryContextPromise
+	}
+	_repositoryContextPromise = resolveRepositoryContext(process.cwd())
+	return _repositoryContextPromise
+}
+
+async function resolveRepositoryContext(
+	cwd: string,
+): Promise<RepositoryContext> {
+	const [worktreeRoot, gitCommonDir] = await Promise.all([
+		resolveGitPath(cwd, ['--show-toplevel']),
+		resolveGitPath(cwd, ['--path-format=absolute', '--git-common-dir']),
+	])
+
+	return {
+		worktreeRoot: await realpath(worktreeRoot),
+		gitCommonDir: await realpath(gitCommonDir),
+	}
+}
+
+async function resolveGitPath(cwd: string, args: string[]): Promise<string> {
+	const proc = Bun.spawn(['git', '-C', cwd, 'rev-parse', ...args], {
 		stdout: 'pipe',
 		stderr: 'pipe',
 	})
@@ -258,7 +301,7 @@ async function resolveGitRoot(): Promise<string> {
 		throw new Error('Not inside a git repository')
 	}
 
-	return realpath(stdout.trim())
+	return stdout.trim()
 }
 
 /**
@@ -266,6 +309,7 @@ async function resolveGitRoot(): Promise<string> {
  */
 export function _resetGitRootCache(): void {
 	_gitRootPromise = null
+	_repositoryContextPromise = null
 }
 
 /**
@@ -274,6 +318,13 @@ export function _resetGitRootCache(): void {
  * Why: test file/path inputs are user-controlled and must not escape the repo.
  */
 export async function validatePath(inputPath: string): Promise<string> {
+	return (await resolvePathContext(inputPath)).realPath
+}
+
+export async function resolvePathContext(
+	inputPath: string,
+	options?: { baseDir?: string },
+): Promise<PathContext> {
 	if (inputPath.includes('\x00')) {
 		throw new Error('Path contains null byte')
 	}
@@ -286,26 +337,63 @@ export async function validatePath(inputPath: string): Promise<string> {
 		throw new Error('Path cannot be empty')
 	}
 
-	const resolvedPath = path.resolve(inputPath)
+	const resolvedPath = path.resolve(
+		options?.baseDir ?? process.cwd(),
+		inputPath,
+	)
 	let realInputPath: string
+	let nearestExistingDir: string
 
 	try {
 		realInputPath = await realpath(resolvedPath)
+		nearestExistingDir = (await stat(realInputPath)).isDirectory()
+			? realInputPath
+			: path.dirname(realInputPath)
 	} catch (error) {
 		const err = error as NodeJS.ErrnoException
 		if (err.code === 'ENOENT') {
-			realInputPath = await resolveNearestAncestor(resolvedPath)
+			const resolved = await resolveNearestAncestor(resolvedPath)
+			realInputPath = resolved.realPath
+			nearestExistingDir = resolved.nearestExistingDir
 		} else {
 			throw new Error(`Cannot resolve path: ${err.message}`)
 		}
 	}
 
-	const gitRoot = await getGitRoot()
-	if (realInputPath !== gitRoot && !realInputPath.startsWith(`${gitRoot}/`)) {
-		throw new Error(`Path outside repository: ${inputPath}`)
+	const startupContext = await getStartupRepositoryContext()
+	if (isPathInsideOrEqual(realInputPath, startupContext.worktreeRoot)) {
+		return {
+			realPath: realInputPath,
+			worktreeRoot: startupContext.worktreeRoot,
+			startupRoot: startupContext.worktreeRoot,
+			gitCommonDir: startupContext.gitCommonDir,
+		}
 	}
 
-	return realInputPath
+	let targetContext: RepositoryContext
+	try {
+		targetContext = await resolveRepositoryContext(nearestExistingDir)
+	} catch {
+		throw new Error(
+			`Path outside configured runner repository or linked worktrees: ${inputPath}`,
+		)
+	}
+
+	if (
+		targetContext.gitCommonDir === startupContext.gitCommonDir &&
+		isPathInsideOrEqual(realInputPath, targetContext.worktreeRoot)
+	) {
+		return {
+			realPath: realInputPath,
+			worktreeRoot: targetContext.worktreeRoot,
+			startupRoot: startupContext.worktreeRoot,
+			gitCommonDir: targetContext.gitCommonDir,
+		}
+	}
+
+	throw new Error(
+		`Path outside configured runner repository or linked worktrees: ${inputPath}`,
+	)
 }
 
 /**
@@ -315,7 +403,10 @@ export async function validatePath(inputPath: string): Promise<string> {
  * Why: a naive fallback to path.resolve on ENOENT misses intermediate symlinks
  * that could escape the repository boundary.
  */
-async function resolveNearestAncestor(resolvedPath: string): Promise<string> {
+async function resolveNearestAncestor(resolvedPath: string): Promise<{
+	realPath: string
+	nearestExistingDir: string
+}> {
 	let dir = path.dirname(resolvedPath)
 	const suffix = path.basename(resolvedPath)
 	const segments: string[] = [suffix]
@@ -323,14 +414,30 @@ async function resolveNearestAncestor(resolvedPath: string): Promise<string> {
 	while (dir !== path.dirname(dir)) {
 		try {
 			const realDir = await realpath(dir)
-			return path.join(realDir, ...segments)
+			return {
+				realPath: path.join(realDir, ...segments),
+				nearestExistingDir: realDir,
+			}
 		} catch {
 			segments.unshift(path.basename(dir))
 			dir = path.dirname(dir)
 		}
 	}
 
-	return resolvedPath
+	return {
+		realPath: resolvedPath,
+		nearestExistingDir: path.dirname(resolvedPath),
+	}
+}
+
+function isPathInsideOrEqual(candidatePath: string, rootPath: string): boolean {
+	const relative = path.relative(rootPath, candidatePath)
+	return (
+		relative === '' ||
+		(relative.length > 0 &&
+			!relative.startsWith('..') &&
+			!path.isAbsolute(relative))
+	)
 }
 
 /**
@@ -383,7 +490,7 @@ function hasShellUnsafeCharacters(value: string): boolean {
 
 function normalizeSummary(
 	summary: TestSummary,
-): z.infer<typeof testSummarySchema> {
+): z.infer<typeof testSummaryCoreSchema> {
 	return {
 		passed: summary.passed,
 		failed: summary.failed,
@@ -627,6 +734,7 @@ export async function spawnWithTimeout(
 	cmd: string[],
 	timeoutMs: number,
 	options?: {
+		cwd?: string
 		env?: Record<string, string>
 		maxBytes?: number
 	},
@@ -641,6 +749,7 @@ export async function spawnWithTimeout(
 	const proc = (() => {
 		try {
 			return Bun.spawn(cmd, {
+				cwd: options?.cwd,
 				env: options?.env,
 				stdout: 'pipe',
 				stderr: 'pipe',
@@ -693,6 +802,7 @@ export async function spawnWithTimeout(
  */
 async function runBunTests(
 	pattern?: string,
+	cwd = process.cwd(),
 ): Promise<z.infer<typeof testSummarySchema>> {
 	const invocation = createBunInvocation(pattern)
 
@@ -704,6 +814,7 @@ async function runBunTests(
 		stdoutTruncated,
 		stderrTruncated,
 	} = await spawnWithTimeout(invocation.cmd, TEST_TIMEOUT_MS, {
+		cwd,
 		env: invocation.env,
 	})
 
@@ -729,6 +840,7 @@ async function runBunTests(
 			failed: 0,
 			total: passed,
 			failures: [],
+			cwd,
 		}
 	}
 
@@ -744,12 +856,15 @@ async function runBunTests(
 		)
 	}
 
-	return normalizeSummary(parseBunTestOutput(output))
+	return {
+		...normalizeSummary(parseBunTestOutput(output)),
+		cwd,
+	}
 }
 
-async function runBunTestCoverage(): Promise<
-	z.infer<typeof testCoverageSchema>
-> {
+async function runBunTestCoverage(
+	cwd = process.cwd(),
+): Promise<z.infer<typeof testCoverageSchema>> {
 	const invocation = createBunCoverageInvocation()
 	const {
 		stdout,
@@ -759,6 +874,7 @@ async function runBunTestCoverage(): Promise<
 		stdoutTruncated,
 		stderrTruncated,
 	} = await spawnWithTimeout(invocation.cmd, COVERAGE_TIMEOUT_MS, {
+		cwd,
 		env: invocation.env,
 	})
 
@@ -801,13 +917,14 @@ async function runBunTestCoverage(): Promise<
 	}
 
 	return {
+		cwd,
 		summary,
 		coverage: { percent, uncovered },
 	}
 }
 
 function formatTestSummary(
-	summary: z.infer<typeof testSummarySchema>,
+	summary: z.infer<typeof testSummaryCoreSchema> & { cwd?: string },
 	format: 'markdown' | 'json',
 	context?: string,
 ): string {
@@ -868,13 +985,14 @@ export function extractTopStackFrame(stack: string): string {
 }
 
 export function compactSummaryForJsonText(
-	summary: z.infer<typeof testSummarySchema>,
+	summary: z.infer<typeof testSummaryCoreSchema> & { cwd?: string },
 ): Record<string, unknown> {
 	const commonFile = getCommonFailureFile(summary.failures)
 	if (!commonFile) {
 		return stripNullishDeep(summary)
 	}
 	return stripNullishDeep({
+		cwd: summary.cwd,
 		passed: summary.passed,
 		failed: summary.failed,
 		total: summary.total,
@@ -910,6 +1028,46 @@ function formatCoverageResult(
 	}
 
 	return output.trim()
+}
+
+async function getDefaultExecutionCwd(): Promise<string> {
+	return realpath(process.cwd())
+}
+
+function isPathLikePattern(pattern: string): boolean {
+	return pattern.includes('/') || pattern.includes('..')
+}
+
+async function resolveRunTestsContext(args: {
+	pattern?: string
+	cwd?: string
+}): Promise<{ pattern?: string; cwd: string }> {
+	const cwdContext = args.cwd ? await resolvePathContext(args.cwd) : undefined
+	const patternContext =
+		args.pattern && isPathLikePattern(args.pattern)
+			? await resolvePathContext(args.pattern, {
+					baseDir: cwdContext?.worktreeRoot ?? process.cwd(),
+				})
+			: undefined
+
+	if (
+		cwdContext &&
+		patternContext &&
+		cwdContext.worktreeRoot !== patternContext.worktreeRoot
+	) {
+		throw new BunToolError(
+			'PATTERN_INVALID',
+			'Pattern path and cwd must resolve to the same worktree',
+		)
+	}
+
+	return {
+		pattern: args.pattern,
+		cwd:
+			cwdContext?.worktreeRoot ??
+			patternContext?.worktreeRoot ??
+			(await getDefaultExecutionCwd()),
+	}
 }
 
 /**
@@ -966,6 +1124,13 @@ export async function createBunServer(
 			description:
 				'Run Bun tests for suite-level regression checks. Returns pass/fail counts and structured failures. Read-only. No fixes or coverage. Use bun_testFile for one file; bun_testCoverage for coverage.',
 			inputSchema: z.object({
+				cwd: z
+					.string()
+					.max(4096)
+					.optional()
+					.describe(
+						'Working directory inside startup checkout or a linked worktree',
+					),
 				pattern: z
 					.string()
 					.max(4096)
@@ -1000,14 +1165,16 @@ export async function createBunServer(
 							const pattern = args.pattern
 							if (pattern) {
 								validateShellSafePattern(pattern)
-								if (pattern.includes('/') || pattern.includes('..')) {
-									await validatePath(pattern)
-								}
 							}
 
-							const summary = await runBunTests(pattern)
+							const context = await resolveRunTestsContext({
+								pattern,
+								cwd: args.cwd,
+							})
+							const summary = await runBunTests(context.pattern, context.cwd)
 							const format = args.response_format ?? 'json'
 							runTestsLogger.info('bun_runTests completed', {
+								cwd: summary.cwd,
 								passed: summary.passed,
 								failed: summary.failed,
 								total: summary.total,
@@ -1067,11 +1234,15 @@ export async function createBunServer(
 					},
 					async () => {
 						try {
-							const validatedFile = await validatePath(args.file)
-							const summary = await runBunTests(validatedFile)
+							const fileContext = await resolvePathContext(args.file)
+							const summary = await runBunTests(
+								fileContext.realPath,
+								fileContext.worktreeRoot,
+							)
 							const format = args.response_format ?? 'json'
 							testFileLogger.info('bun_testFile completed', {
 								file: args.file,
+								cwd: summary.cwd,
 								passed: summary.passed,
 								failed: summary.failed,
 							})
@@ -1103,6 +1274,13 @@ export async function createBunServer(
 			description:
 				'Run Bun tests with coverage. Returns test summary, coverage percent, and low-coverage files. Read-only and slower than bun_runTests. No fixes. Use bun_runTests for faster no-coverage checks.',
 			inputSchema: z.object({
+				cwd: z
+					.string()
+					.max(4096)
+					.optional()
+					.describe(
+						'Working directory inside startup checkout or a linked worktree',
+					),
 				response_format: z
 					.enum(['markdown', 'json'])
 					.optional()
@@ -1127,9 +1305,13 @@ export async function createBunServer(
 					},
 					async () => {
 						try {
-							const result = await runBunTestCoverage()
+							const cwd = args.cwd
+								? (await resolvePathContext(args.cwd)).worktreeRoot
+								: await getDefaultExecutionCwd()
+							const result = await runBunTestCoverage(cwd)
 							const format = args.response_format ?? 'json'
 							coverageLogger.info('bun_testCoverage completed', {
+								cwd: result.cwd,
 								failed: result.summary.failed,
 								passed: result.summary.passed,
 								coveragePercent: result.coverage.percent,
