@@ -8,10 +8,15 @@ import {
 	createBunCoverageInvocation,
 	createBunInvocation,
 	createBunServer,
+	createIdleShutdownWatcher,
+	createIdleShutdownWatcherFromEnv,
 	createParentLivenessWatcher,
+	DEFAULT_IDLE_EXIT_MS,
 	DEFAULT_PARENT_CHECK_MS,
 	extractTopStackFrame,
+	MIN_IDLE_EXIT_MS,
 	MIN_PARENT_CHECK_MS,
+	parseIdleExitMs,
 	parseParentCheckMs,
 	SERVER_VERSION,
 	spawnWithTimeout,
@@ -511,6 +516,51 @@ describe('bun tools integration', () => {
 		}
 	})
 
+	test('tool calls and logging/setLevel are tracked as request activity', async () => {
+		_resetGitRootCache()
+		const activityEvents: string[] = []
+		const server = await createBunServer({
+			onRequestStart: () => {
+				activityEvents.push('start')
+				return () => activityEvents.push('finish')
+			},
+		})
+		const client = new Client({ name: 'bun-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const expectToolActivity = async (name: string, toolArguments: Record<string, unknown>) => {
+				activityEvents.length = 0
+				await client.callTool({
+					name,
+					arguments: toolArguments,
+				})
+				expect(activityEvents).toEqual(['start', 'finish'])
+			}
+
+			// Discovery alone should not keep an abandoned runner alive.
+			await client.listTools()
+			expect(activityEvents).toEqual([])
+
+			await expectToolActivity('bun_runTests', {
+				pattern: 'nonesuchpattern',
+				response_format: 'json',
+			})
+			await expectToolActivity('bun_testFile', {
+				file: 'definitely-missing.test.ts',
+				response_format: 'json',
+			})
+
+			activityEvents.length = 0
+			await client.setLoggingLevel('info')
+			expect(activityEvents).toEqual(['start', 'finish'])
+		} finally {
+			await Promise.all([client.close(), server.close()])
+		}
+	})
+
 	test('coverage output schema uses uncovered {file, percent} entries', async () => {
 		const server = await createBunServer()
 		const client = new Client({ name: 'bun-client', version: '0.0.1' })
@@ -582,6 +632,207 @@ describe('parseParentCheckMs', () => {
 		expect(parseParentCheckMs('50')).toBe(50)
 		expect(parseParentCheckMs('200')).toBe(200)
 		expect(parseParentCheckMs('5000')).toBe(5000)
+	})
+})
+
+describe('parseIdleExitMs', () => {
+	test('returns default when env is undefined', () => {
+		expect(parseIdleExitMs(undefined)).toBe(DEFAULT_IDLE_EXIT_MS)
+	})
+
+	test('returns default for empty / whitespace string', () => {
+		expect(parseIdleExitMs('')).toBe(DEFAULT_IDLE_EXIT_MS)
+		expect(parseIdleExitMs('   ')).toBe(DEFAULT_IDLE_EXIT_MS)
+	})
+
+	test('returns default for non-numeric / NaN values', () => {
+		expect(parseIdleExitMs('abc')).toBe(DEFAULT_IDLE_EXIT_MS)
+		expect(parseIdleExitMs('NaN')).toBe(DEFAULT_IDLE_EXIT_MS)
+	})
+
+	test('returns 0 (disabled) for zero and negative values', () => {
+		expect(parseIdleExitMs('0')).toBe(0)
+		expect(parseIdleExitMs('-1')).toBe(0)
+	})
+
+	test('clamps tiny positive values up to MIN_IDLE_EXIT_MS', () => {
+		expect(parseIdleExitMs('1')).toBe(MIN_IDLE_EXIT_MS)
+		expect(parseIdleExitMs('49')).toBe(MIN_IDLE_EXIT_MS)
+	})
+
+	test('passes through values at or above the minimum', () => {
+		expect(parseIdleExitMs('50')).toBe(50)
+		expect(parseIdleExitMs('200')).toBe(200)
+		expect(parseIdleExitMs('900000')).toBe(900_000)
+	})
+})
+
+describe('createIdleShutdownWatcherFromEnv', () => {
+	test('uses the default idle timeout when env is omitted', () => {
+		const calls: number[] = []
+		const fakeWatcher = {
+			recordRequestStart: () => () => {},
+			stop: () => {},
+		}
+		const result = createIdleShutdownWatcherFromEnv({
+			env: {},
+			onIdle: () => {},
+			createWatcher: (opts) => {
+				calls.push(opts.idleMs)
+				return fakeWatcher
+			},
+		})
+
+		expect(result.idleMs).toBe(DEFAULT_IDLE_EXIT_MS)
+		expect(result.watcher).toBe(fakeWatcher)
+		expect(calls).toEqual([DEFAULT_IDLE_EXIT_MS])
+	})
+
+	test('passes zero through so the watcher can be disabled', () => {
+		const calls: number[] = []
+		const result = createIdleShutdownWatcherFromEnv({
+			env: { MCP_IDLE_EXIT_MS: '0' },
+			onIdle: () => {},
+			createWatcher: (opts) => {
+				calls.push(opts.idleMs)
+				return undefined
+			},
+		})
+
+		expect(result.idleMs).toBe(0)
+		expect(result.watcher).toBeUndefined()
+		expect(calls).toEqual([0])
+	})
+})
+
+describe('createIdleShutdownWatcher', () => {
+	test('returns undefined when idleMs <= 0 (disabled)', () => {
+		expect(
+			createIdleShutdownWatcher({
+				idleMs: 0,
+				onIdle: () => {
+					throw new Error('should not be called')
+				},
+			}),
+		).toBeUndefined()
+		expect(
+			createIdleShutdownWatcher({
+				idleMs: -1,
+				onIdle: () => {
+					throw new Error('should not be called')
+				},
+			}),
+		).toBeUndefined()
+	})
+
+	test('calls .unref() on the idle timer handle', () => {
+		const probe = setTimeout(() => {}, 60_000)
+		const timerProto = Object.getPrototypeOf(probe) as { unref: () => void }
+		clearTimeout(probe)
+		const unrefSpy = spyOn(timerProto, 'unref')
+		try {
+			const watcher = createIdleShutdownWatcher({
+				idleMs: 60_000,
+				onIdle: () => {
+					throw new Error('should not be called')
+				},
+			})
+			expect(watcher).toBeDefined()
+			expect(unrefSpy).toHaveBeenCalledTimes(1)
+			watcher?.stop()
+		} finally {
+			unrefSpy.mockRestore()
+		}
+	})
+
+	test('invokes onIdle once after inactivity', async () => {
+		let calls = 0
+		const watcher = createIdleShutdownWatcher({
+			idleMs: 50,
+			onIdle: () => {
+				calls += 1
+			},
+		})
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 140))
+			expect(calls).toBe(1)
+		} finally {
+			watcher?.stop()
+		}
+	})
+
+	test('does not invoke onIdle while a request is active', async () => {
+		let calls = 0
+		const watcher = createIdleShutdownWatcher({
+			idleMs: 50,
+			onIdle: () => {
+				calls += 1
+			},
+		})
+		const finishRequest = watcher?.recordRequestStart()
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 140))
+			expect(calls).toBe(0)
+		} finally {
+			finishRequest?.()
+			watcher?.stop()
+		}
+	})
+
+	test('reschedules idle shutdown after active request finishes', async () => {
+		let calls = 0
+		const watcher = createIdleShutdownWatcher({
+			idleMs: 50,
+			onIdle: () => {
+				calls += 1
+			},
+		})
+		const finishRequest = watcher?.recordRequestStart()
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 90))
+			expect(calls).toBe(0)
+			finishRequest?.()
+			await new Promise((resolve) => setTimeout(resolve, 90))
+			expect(calls).toBe(1)
+		} finally {
+			watcher?.stop()
+		}
+	})
+
+	test('waits for all concurrent requests and ignores duplicate finishes', async () => {
+		let calls = 0
+		const watcher = createIdleShutdownWatcher({
+			idleMs: 50,
+			onIdle: () => {
+				calls += 1
+			},
+		})
+		const finishFirst = watcher?.recordRequestStart()
+		const finishSecond = watcher?.recordRequestStart()
+		try {
+			finishFirst?.()
+			finishFirst?.()
+			await new Promise((resolve) => setTimeout(resolve, 90))
+			expect(calls).toBe(0)
+			finishSecond?.()
+			await new Promise((resolve) => setTimeout(resolve, 90))
+			expect(calls).toBe(1)
+		} finally {
+			watcher?.stop()
+		}
+	})
+
+	test('stop prevents later idle shutdown', async () => {
+		let calls = 0
+		const watcher = createIdleShutdownWatcher({
+			idleMs: 50,
+			onIdle: () => {
+				calls += 1
+			},
+		})
+		watcher?.stop()
+		await new Promise((resolve) => setTimeout(resolve, 120))
+		expect(calls).toBe(0)
 	})
 })
 
