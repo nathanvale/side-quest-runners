@@ -630,16 +630,17 @@ describe('parseParentCheckMs', () => {
 })
 
 describe('parseIdleExitMs', () => {
-	test('returns default when env is undefined', () => {
+	test('returns default disabled value when env is undefined', () => {
+		expect(DEFAULT_IDLE_EXIT_MS).toBe(0)
 		expect(parseIdleExitMs(undefined)).toBe(DEFAULT_IDLE_EXIT_MS)
 	})
 
-	test('returns default for empty / whitespace string', () => {
+	test('returns default disabled value for empty / whitespace string', () => {
 		expect(parseIdleExitMs('')).toBe(DEFAULT_IDLE_EXIT_MS)
 		expect(parseIdleExitMs('   ')).toBe(DEFAULT_IDLE_EXIT_MS)
 	})
 
-	test('returns default for non-numeric / NaN values', () => {
+	test('returns default disabled value for non-numeric / NaN values', () => {
 		expect(parseIdleExitMs('abc')).toBe(DEFAULT_IDLE_EXIT_MS)
 		expect(parseIdleExitMs('NaN')).toBe(DEFAULT_IDLE_EXIT_MS)
 	})
@@ -662,23 +663,19 @@ describe('parseIdleExitMs', () => {
 })
 
 describe('createIdleShutdownWatcherFromEnv', () => {
-	test('uses the default idle timeout when env is omitted', () => {
+	test('leaves idle shutdown disabled when env is omitted', () => {
 		const calls: number[] = []
-		const fakeWatcher = {
-			recordRequestStart: () => () => {},
-			stop: () => {},
-		}
 		const result = createIdleShutdownWatcherFromEnv({
 			env: {},
 			onIdle: () => {},
 			createWatcher: (opts) => {
 				calls.push(opts.idleMs)
-				return fakeWatcher
+				return undefined
 			},
 		})
 
 		expect(result.idleMs).toBe(DEFAULT_IDLE_EXIT_MS)
-		expect(result.watcher).toBe(fakeWatcher)
+		expect(result.watcher).toBeUndefined()
 		expect(calls).toEqual([DEFAULT_IDLE_EXIT_MS])
 	})
 

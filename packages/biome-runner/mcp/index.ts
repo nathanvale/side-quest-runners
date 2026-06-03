@@ -1395,8 +1395,11 @@ export const MIN_PARENT_CHECK_MS = 50
 
 /**
  * Default idle shutdown interval in milliseconds.
+ *
+ * Zero keeps runners available unless the host opts into idle cleanup with
+ * MCP_IDLE_EXIT_MS.
  */
-export const DEFAULT_IDLE_EXIT_MS = 900_000
+export const DEFAULT_IDLE_EXIT_MS = 0
 
 /**
  * Lower bound for the idle interval to prevent event-loop saturation.
@@ -1566,8 +1569,8 @@ interface IdleExitEnv {
 /**
  * Create idle shutdown wiring from process-style environment values.
  *
- * Why: startBiomeServer should exercise the same default-on / disabled parsing
- * as unit tests without making runtime smoke wait for the 15-minute default.
+ * Why: startBiomeServer should exercise the same opt-in / disabled parsing as
+ * unit tests.
  */
 export function createIdleShutdownWatcherFromEnv(opts: {
 	env: IdleExitEnv
