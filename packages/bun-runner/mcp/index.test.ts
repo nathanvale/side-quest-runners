@@ -449,6 +449,12 @@ describe('validation helpers', () => {
 		}
 	})
 
+	test('rejects file paths when a directory is required', async () => {
+		await expect(resolvePathContext('package.json', { requireDirectory: true })).rejects.toThrow(
+			'cwd must resolve to a directory',
+		)
+	})
+
 	test('rejects paths in unrelated git repositories', async () => {
 		_resetGitRootCache()
 		const unrelatedRepo = await mkdtemp(path.join(tmpdir(), 'bun-runner-unrelated-repo-'))
@@ -496,7 +502,7 @@ describe('createBunInvocation', () => {
 			expect(keys.includes('TMPDIR')).toBe(true)
 			expect(keys.includes('AWS_SECRET_ACCESS_KEY')).toBe(false)
 			expect(keys.includes('GITHUB_TOKEN')).toBe(false)
-			expect(invocation.cmd).toEqual(['bun', 'test', '--', 'auth'])
+			expect(invocation.cmd).toEqual(['bun', 'test', '--test-name-pattern', 'auth'])
 		} finally {
 			if (previousNodePath === undefined) {
 				delete process.env.NODE_PATH
@@ -519,6 +525,16 @@ describe('createBunInvocation', () => {
 	test('builds coverage command with Bun coverage flag', () => {
 		const invocation = createBunCoverageInvocation()
 		expect(invocation.cmd).toEqual(['bun', 'test', '--coverage'])
+	})
+
+	test('uses positional arguments for path-like file patterns', () => {
+		expect(createBunInvocation('login.test.ts').cmd).toEqual(['bun', 'test', '--', 'login.test.ts'])
+		expect(createBunInvocation('tests/login.ts').cmd).toEqual([
+			'bun',
+			'test',
+			'--',
+			'tests/login.ts',
+		])
 	})
 })
 
@@ -689,7 +705,7 @@ describe('bun tools integration', () => {
 			const result = await client.callTool({
 				name: 'bun_runTests',
 				arguments: {
-					cwd: worktree,
+					cwd: fixtureDir,
 					pattern: 'linked cwd unique pass',
 					response_format: 'json',
 				},
@@ -701,12 +717,78 @@ describe('bun tools integration', () => {
 				failed: number
 				total: number
 			}
-			expect(output.cwd).toBe(await realpath(worktree))
+			expect(output.cwd).toBe(await realpath(fixtureDir))
 			expect(output.failed).toBe(0)
 			expect(output.total).toBe(1)
 		} finally {
 			await Promise.all([client.close(), server.close()])
 			await cleanup()
+		}
+	})
+
+	test('bun_runTests preserves subdirectory cwd for path patterns', async () => {
+		_resetGitRootCache()
+		const fixtureDir = path.join(process.cwd(), 'reports', 'bun-subdir-cwd-fixture')
+		await rm(fixtureDir, { recursive: true, force: true })
+		await mkdir(path.join(fixtureDir, 'tests'), { recursive: true })
+		await writeFile(
+			path.join(fixtureDir, 'tests', 'pass.test.ts'),
+			"import { expect, test } from 'bun:test';\ntest('subdir cwd unique pass', () => expect(true).toBe(true));\n",
+		)
+
+		const server = await createBunServer()
+		const client = new Client({ name: 'bun-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'bun_runTests',
+				arguments: {
+					cwd: fixtureDir,
+					pattern: 'tests/pass.test.ts',
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(false)
+			const output = result.structuredContent as {
+				cwd: string
+				failed: number
+				total: number
+			}
+			expect(output.cwd).toBe(await realpath(fixtureDir))
+			expect(output.failed).toBe(0)
+			expect(output.total).toBe(1)
+		} finally {
+			await Promise.all([client.close(), server.close()])
+			await rm(fixtureDir, { recursive: true, force: true })
+		}
+	})
+
+	test('bun_runTests rejects file paths as cwd', async () => {
+		_resetGitRootCache()
+		const server = await createBunServer()
+		const client = new Client({ name: 'bun-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'bun_runTests',
+				arguments: {
+					cwd: 'package.json',
+					pattern: 'nonesuchpattern',
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(true)
+			expect(result.content[0]?.text).toContain('CWD_INVALID')
+		} finally {
+			await Promise.all([client.close(), server.close()])
 		}
 	})
 

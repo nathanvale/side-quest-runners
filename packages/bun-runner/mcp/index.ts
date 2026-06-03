@@ -69,6 +69,7 @@ const TOOL_ERROR_CODES = [
 	'TIMEOUT',
 	'SPAWN_FAILURE',
 	'PATTERN_INVALID',
+	'CWD_INVALID',
 ] as const
 
 type ToolErrorCode = (typeof TOOL_ERROR_CODES)[number]
@@ -323,7 +324,7 @@ export async function validatePath(inputPath: string): Promise<string> {
 
 export async function resolvePathContext(
 	inputPath: string,
-	options?: { baseDir?: string },
+	options?: { baseDir?: string; requireDirectory?: boolean },
 ): Promise<PathContext> {
 	if (inputPath.includes('\x00')) {
 		throw new Error('Path contains null byte')
@@ -343,10 +344,12 @@ export async function resolvePathContext(
 	)
 	let realInputPath: string
 	let nearestExistingDir: string
+	let inputIsDirectory = false
 
 	try {
 		realInputPath = await realpath(resolvedPath)
-		nearestExistingDir = (await stat(realInputPath)).isDirectory()
+		inputIsDirectory = (await stat(realInputPath)).isDirectory()
+		nearestExistingDir = inputIsDirectory
 			? realInputPath
 			: path.dirname(realInputPath)
 	} catch (error) {
@@ -358,6 +361,13 @@ export async function resolvePathContext(
 		} else {
 			throw new Error(`Cannot resolve path: ${err.message}`)
 		}
+	}
+
+	if (options?.requireDirectory && !inputIsDirectory) {
+		throw new BunToolError(
+			'CWD_INVALID',
+			`cwd must resolve to a directory: ${inputPath}`,
+		)
 	}
 
 	const startupContext = await getStartupRepositoryContext()
@@ -544,7 +554,11 @@ export function createBunInvocation(pattern?: string): {
 	}
 
 	return {
-		cmd: pattern ? ['bun', 'test', '--', pattern] : ['bun', 'test'],
+		cmd: pattern
+			? isPathLikePattern(pattern)
+				? ['bun', 'test', '--', pattern]
+				: ['bun', 'test', '--test-name-pattern', pattern]
+			: ['bun', 'test'],
 		env,
 	}
 }
@@ -1035,18 +1049,25 @@ async function getDefaultExecutionCwd(): Promise<string> {
 }
 
 function isPathLikePattern(pattern: string): boolean {
-	return pattern.includes('/') || pattern.includes('..')
+	return (
+		pattern.includes('/') ||
+		pattern.includes('..') ||
+		/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(pattern) ||
+		/\.[cm]?[jt]sx?$/.test(pattern)
+	)
 }
 
 async function resolveRunTestsContext(args: {
 	pattern?: string
 	cwd?: string
 }): Promise<{ pattern?: string; cwd: string }> {
-	const cwdContext = args.cwd ? await resolvePathContext(args.cwd) : undefined
+	const cwdContext = args.cwd
+		? await resolvePathContext(args.cwd, { requireDirectory: true })
+		: undefined
 	const patternContext =
 		args.pattern && isPathLikePattern(args.pattern)
 			? await resolvePathContext(args.pattern, {
-					baseDir: cwdContext?.worktreeRoot ?? process.cwd(),
+					baseDir: cwdContext?.realPath ?? process.cwd(),
 				})
 			: undefined
 
@@ -1064,7 +1085,7 @@ async function resolveRunTestsContext(args: {
 	return {
 		pattern: args.pattern,
 		cwd:
-			cwdContext?.worktreeRoot ??
+			cwdContext?.realPath ??
 			patternContext?.worktreeRoot ??
 			(await getDefaultExecutionCwd()),
 	}
@@ -1136,7 +1157,7 @@ export async function createBunServer(
 					.max(4096)
 					.optional()
 					.describe(
-						"File pattern or test name to filter tests (e.g., 'auth' or 'login.test.ts')",
+						"Path-like file pattern or test name regex to filter tests (e.g., 'auth' or 'login.test.ts')",
 					),
 				response_format: z
 					.enum(['markdown', 'json'])
@@ -1306,7 +1327,11 @@ export async function createBunServer(
 					async () => {
 						try {
 							const cwd = args.cwd
-								? (await resolvePathContext(args.cwd)).worktreeRoot
+								? (
+										await resolvePathContext(args.cwd, {
+											requireDirectory: true,
+										})
+									).realPath
 								: await getDefaultExecutionCwd()
 							const result = await runBunTestCoverage(cwd)
 							const format = args.response_format ?? 'json'
