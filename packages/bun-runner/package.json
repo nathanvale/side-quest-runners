@@ -1,6 +1,6 @@
 {
 	"name": "@side-quest/bun-runner",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"description": "Bun test runner MCP server — structured, token-efficient test output for Claude Code",
 	"author": {
 		"name": "Nathan Vale",
