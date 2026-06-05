@@ -261,6 +261,61 @@ error: actual test error
 		expect(result.failures[0]?.file).toBe('/path/fail.ts')
 	})
 
+	test('parses timeout failures without a preceding error block', () => {
+		const output = `bun test v1.3.14 (0d9b296a)
+
+skills/test-runner/scripts/fixtures/timeout.test.ts:
+(fail) timeout fixture > times out a slow promise [51.18ms]
+  ^ this test timed out after 50ms.
+
+ 0 pass
+ 1 fail
+Ran 1 test across 1 file. [69.00ms]`
+
+		const result = parseBunTestOutput(output)
+
+		expect(result.passed).toBe(0)
+		expect(result.failed).toBe(1)
+		expect(result.failures).toHaveLength(1)
+		expect(result.failures[0]?.file).toBe('skills/test-runner/scripts/fixtures/timeout.test.ts')
+		expect(result.failures[0]?.message).toContain('timeout fixture > times out a slow promise')
+		expect(result.failures[0]?.message).toContain('this test timed out after 50ms')
+	})
+
+	test('parses runtime errors without a preceding error block', () => {
+		const output = `bun test v1.3.14 (0d9b296a)
+
+skills/test-runner/scripts/fixtures/runtime-error.test.ts:
+1 | import { describe, test } from "bun:test";
+2 |
+3 | function normalizeName(value: unknown): string {
+4 | 	return (value as { name: string }).name.toUpperCase();
+             ^
+TypeError: null is not an object (evaluating 'value.name')
+      at normalizeName (/repo/skills/test-runner/scripts/fixtures/runtime-error.test.ts:4:10)
+      at <anonymous> (/repo/skills/test-runner/scripts/fixtures/runtime-error.test.ts:9:3)
+(fail) runtime error fixture > reports runtime type failure [0.83ms]
+
+ 0 pass
+ 1 fail
+Ran 1 test across 1 file. [17.00ms]`
+
+		const result = parseBunTestOutput(output)
+
+		expect(result.passed).toBe(0)
+		expect(result.failed).toBe(1)
+		expect(result.failures).toHaveLength(1)
+		expect(result.failures[0]?.file).toBe(
+			'/repo/skills/test-runner/scripts/fixtures/runtime-error.test.ts',
+		)
+		expect(result.failures[0]?.line).toBe(4)
+		expect(result.failures[0]?.message).toContain(
+			'runtime error fixture > reports runtime type failure',
+		)
+		expect(result.failures[0]?.message).toContain('TypeError: null is not an object')
+		expect(result.failures[0]?.stack).toContain('at normalizeName')
+	})
+
 	test('discards orphan error: blocks without (fail) marker in v1.3+ format', () => {
 		// Orphan error: lines that are never terminated by (fail)
 		// should be discarded as they're likely console.error output
