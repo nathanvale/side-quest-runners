@@ -1,5 +1,11 @@
 # @side-quest/bun-runner
 
+## 2.0.1
+
+### Patch Changes
+
+- [#81](https://github.com/nathanvale/side-quest-runners/pull/81) [`491d6fe`](https://github.com/nathanvale/side-quest-runners/commit/491d6fefefa2098178159dd354a075a804675a54) Thanks [@nathanvale](https://github.com/nathanvale)! - Parse Bun timeout and runtime failures that emit a `(fail)` marker without a preceding `error:` block.
+
 ## 2.0.0
 
 ### Major Changes
