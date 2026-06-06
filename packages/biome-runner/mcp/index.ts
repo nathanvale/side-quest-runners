@@ -153,7 +153,7 @@ const lintDiagnosticSchema: z.ZodObject<{
 	suggestion: z.string().optional().nullable(),
 })
 
-const lintSummarySchema: z.ZodObject<{
+const lintSummaryCoreSchema: z.ZodObject<{
 	errorCount: z.ZodNumber
 	warningCount: z.ZodNumber
 	diagnostics: z.ZodArray<typeof lintDiagnosticSchema>
@@ -163,18 +163,26 @@ const lintSummarySchema: z.ZodObject<{
 	diagnostics: z.array(lintDiagnosticSchema),
 })
 
+const lintSummarySchema = lintSummaryCoreSchema.extend({
+	cwd: z.string(),
+})
+
 const lintFixSchema: z.ZodObject<{
+	cwd: z.ZodString
 	fixed: z.ZodNumber
-	remaining: typeof lintSummarySchema
+	remaining: typeof lintSummaryCoreSchema
 }> = z.object({
+	cwd: z.string(),
 	fixed: z.number(),
-	remaining: lintSummarySchema,
+	remaining: lintSummaryCoreSchema,
 })
 
 const formatCheckSchema: z.ZodObject<{
+	cwd: z.ZodString
 	formatted: z.ZodBoolean
 	unformattedFiles: z.ZodArray<z.ZodString>
 }> = z.object({
+	cwd: z.string(),
 	formatted: z.boolean(),
 	unformattedFiles: z.array(z.string()),
 })
@@ -191,6 +199,19 @@ const PACKAGE_VERSION: string = JSON.parse(
 export const SERVER_VERSION: string = PACKAGE_VERSION
 
 let _gitRootPromise: Promise<string> | null = null
+let _repositoryContextPromise: Promise<RepositoryContext> | null = null
+
+interface RepositoryContext {
+	worktreeRoot: string
+	gitCommonDir: string
+}
+
+interface PathContext {
+	realPath: string
+	worktreeRoot: string
+	startupRoot: string
+	gitCommonDir: string
+}
 
 /**
  * Get the git root once per process using promise coalescing.
@@ -202,12 +223,36 @@ export function getGitRoot(): Promise<string> {
 	if (_gitRootPromise !== null) {
 		return _gitRootPromise
 	}
-	_gitRootPromise = resolveGitRoot()
+	_gitRootPromise = getStartupRepositoryContext().then(
+		(context) => context.worktreeRoot,
+	)
 	return _gitRootPromise
 }
 
-async function resolveGitRoot(): Promise<string> {
-	const proc = Bun.spawn(['git', 'rev-parse', '--show-toplevel'], {
+async function getStartupRepositoryContext(): Promise<RepositoryContext> {
+	if (_repositoryContextPromise !== null) {
+		return _repositoryContextPromise
+	}
+	_repositoryContextPromise = resolveRepositoryContext(process.cwd())
+	return _repositoryContextPromise
+}
+
+async function resolveRepositoryContext(
+	cwd: string,
+): Promise<RepositoryContext> {
+	const [worktreeRoot, gitCommonDir] = await Promise.all([
+		resolveGitPath(cwd, ['--show-toplevel']),
+		resolveGitPath(cwd, ['--path-format=absolute', '--git-common-dir']),
+	])
+
+	return {
+		worktreeRoot: await realpath(worktreeRoot),
+		gitCommonDir: await realpath(gitCommonDir),
+	}
+}
+
+async function resolveGitPath(cwd: string, args: string[]): Promise<string> {
+	const proc = Bun.spawn(['git', '-C', cwd, 'rev-parse', ...args], {
 		stdout: 'pipe',
 		stderr: 'pipe',
 	})
@@ -221,7 +266,7 @@ async function resolveGitRoot(): Promise<string> {
 		throw new Error('Not inside a git repository')
 	}
 
-	return realpath(stdout.trim())
+	return stdout.trim()
 }
 
 /**
@@ -229,6 +274,7 @@ async function resolveGitRoot(): Promise<string> {
  */
 export function _resetGitRootCache(): void {
 	_gitRootPromise = null
+	_repositoryContextPromise = null
 }
 
 /**
@@ -240,11 +286,17 @@ export function _resetGitRootCache(): void {
 export async function validatePathOrDefault(
 	inputPath?: string,
 ): Promise<string> {
+	return (await resolvePathContextOrDefault(inputPath)).realPath
+}
+
+async function resolvePathContextOrDefault(
+	inputPath?: string,
+): Promise<PathContext> {
 	const candidate =
 		inputPath === undefined || inputPath.trim() === ''
 			? process.cwd()
 			: inputPath
-	return validatePath(candidate)
+	return resolvePathContext(candidate)
 }
 
 /**
@@ -254,6 +306,13 @@ export async function validatePathOrDefault(
  * the current repository boundary.
  */
 export async function validatePath(inputPath: string): Promise<string> {
+	return (await resolvePathContext(inputPath)).realPath
+}
+
+export async function resolvePathContext(
+	inputPath: string,
+	options?: { baseDir?: string },
+): Promise<PathContext> {
 	if (inputPath.includes('\x00')) {
 		throw new Error('Path contains null byte')
 	}
@@ -266,26 +325,63 @@ export async function validatePath(inputPath: string): Promise<string> {
 		throw new Error('Path cannot be empty')
 	}
 
-	const resolvedPath = path.resolve(inputPath)
+	const resolvedPath = path.resolve(
+		options?.baseDir ?? process.cwd(),
+		inputPath,
+	)
 	let realInputPath: string
+	let nearestExistingDir: string
 
 	try {
 		realInputPath = await realpath(resolvedPath)
+		nearestExistingDir = (await stat(realInputPath)).isDirectory()
+			? realInputPath
+			: path.dirname(realInputPath)
 	} catch (error) {
 		const err = error as NodeJS.ErrnoException
 		if (err.code === 'ENOENT') {
-			realInputPath = await resolveNearestAncestor(resolvedPath)
+			const resolved = await resolveNearestAncestor(resolvedPath)
+			realInputPath = resolved.realPath
+			nearestExistingDir = resolved.nearestExistingDir
 		} else {
 			throw new Error(`Cannot resolve path: ${err.message}`)
 		}
 	}
 
-	const gitRoot = await getGitRoot()
-	if (realInputPath !== gitRoot && !realInputPath.startsWith(`${gitRoot}/`)) {
-		throw new Error(`Path outside repository: ${inputPath}`)
+	const startupContext = await getStartupRepositoryContext()
+	if (isPathInsideOrEqual(realInputPath, startupContext.worktreeRoot)) {
+		return {
+			realPath: realInputPath,
+			worktreeRoot: startupContext.worktreeRoot,
+			startupRoot: startupContext.worktreeRoot,
+			gitCommonDir: startupContext.gitCommonDir,
+		}
 	}
 
-	return realInputPath
+	let targetContext: RepositoryContext
+	try {
+		targetContext = await resolveRepositoryContext(nearestExistingDir)
+	} catch {
+		throw new Error(
+			`Path outside configured runner repository or linked worktrees: ${inputPath}`,
+		)
+	}
+
+	if (
+		targetContext.gitCommonDir === startupContext.gitCommonDir &&
+		isPathInsideOrEqual(realInputPath, targetContext.worktreeRoot)
+	) {
+		return {
+			realPath: realInputPath,
+			worktreeRoot: targetContext.worktreeRoot,
+			startupRoot: startupContext.worktreeRoot,
+			gitCommonDir: targetContext.gitCommonDir,
+		}
+	}
+
+	throw new Error(
+		`Path outside configured runner repository or linked worktrees: ${inputPath}`,
+	)
 }
 
 function hasControlCharacters(value: string): boolean {
@@ -305,7 +401,10 @@ function hasControlCharacters(value: string): boolean {
  * Why: a naive fallback to path.resolve on ENOENT misses intermediate symlinks
  * that could escape the repository boundary.
  */
-async function resolveNearestAncestor(resolvedPath: string): Promise<string> {
+async function resolveNearestAncestor(resolvedPath: string): Promise<{
+	realPath: string
+	nearestExistingDir: string
+}> {
 	let dir = path.dirname(resolvedPath)
 	const suffix = path.basename(resolvedPath)
 	const segments: string[] = [suffix]
@@ -313,14 +412,30 @@ async function resolveNearestAncestor(resolvedPath: string): Promise<string> {
 	while (dir !== path.dirname(dir)) {
 		try {
 			const realDir = await realpath(dir)
-			return path.join(realDir, ...segments)
+			return {
+				realPath: path.join(realDir, ...segments),
+				nearestExistingDir: realDir,
+			}
 		} catch {
 			segments.unshift(path.basename(dir))
 			dir = path.dirname(dir)
 		}
 	}
 
-	return resolvedPath
+	return {
+		realPath: resolvedPath,
+		nearestExistingDir: path.dirname(resolvedPath),
+	}
+}
+
+function isPathInsideOrEqual(candidatePath: string, rootPath: string): boolean {
+	const relative = path.relative(rootPath, candidatePath)
+	return (
+		relative === '' ||
+		(relative.length > 0 &&
+			!relative.startsWith('..') &&
+			!path.isAbsolute(relative))
+	)
 }
 
 /**
@@ -729,13 +844,17 @@ async function ensurePathExists(validatedPath: string): Promise<void> {
 	}
 }
 
-async function runBiomeCheck(inputPath = '.'): Promise<LintSummary> {
+async function runBiomeCheck(
+	inputPath = '.',
+	cwd = process.cwd(),
+): Promise<z.infer<typeof lintSummaryCoreSchema>> {
 	const invocation = createBiomeInvocation({
 		subcommand: 'check',
 		path: inputPath,
 	})
 	const { stdout, stderr, timedOut, stdoutTruncated, stderrTruncated } =
 		await spawnWithTimeout(invocation.cmd, {
+			cwd,
 			env: invocation.env,
 			timeoutMs: BIOME_TIMEOUT_MS,
 		})
@@ -758,6 +877,7 @@ async function runBiomeCheck(inputPath = '.'): Promise<LintSummary> {
 
 async function runBiomeFix(
 	inputPath = '.',
+	cwd = process.cwd(),
 ): Promise<z.infer<typeof lintFixSchema>> {
 	// biome check --write applies both formatting and lint fixes in one pass.
 	// We keep one post-fix check subprocess to return remaining diagnostics.
@@ -767,6 +887,7 @@ async function runBiomeFix(
 		write: true,
 	})
 	const fix = await spawnWithTimeout(fixInvocation.cmd, {
+		cwd,
 		env: fixInvocation.env,
 		timeoutMs: BIOME_TIMEOUT_MS,
 	})
@@ -784,7 +905,7 @@ async function runBiomeFix(
 		)
 	}
 
-	const remaining = await runBiomeCheck(inputPath)
+	const remaining = await runBiomeCheck(inputPath, cwd)
 
 	const report = parseBiomeOutput(fix.stdout || fix.stderr)
 	const fixed = Math.max(
@@ -795,6 +916,7 @@ async function runBiomeFix(
 	)
 
 	return {
+		cwd,
 		fixed,
 		remaining,
 	}
@@ -802,6 +924,7 @@ async function runBiomeFix(
 
 async function runBiomeFormatCheck(
 	inputPath = '.',
+	cwd = process.cwd(),
 ): Promise<z.infer<typeof formatCheckSchema>> {
 	const invocation = createBiomeInvocation({
 		subcommand: 'format',
@@ -809,6 +932,7 @@ async function runBiomeFormatCheck(
 	})
 	const { stdout, exitCode, timedOut, stdoutTruncated, stderrTruncated } =
 		await spawnWithTimeout(invocation.cmd, {
+			cwd,
 			env: invocation.env,
 			timeoutMs: BIOME_TIMEOUT_MS,
 		})
@@ -827,7 +951,7 @@ async function runBiomeFormatCheck(
 	}
 
 	if (exitCode === 0) {
-		return { formatted: true, unformattedFiles: [] }
+		return { cwd, formatted: true, unformattedFiles: [] }
 	}
 
 	const unformattedFiles: string[] = []
@@ -845,11 +969,11 @@ async function runBiomeFormatCheck(
 		// Parse failures still indicate files are not formatted.
 	}
 
-	return { formatted: false, unformattedFiles }
+	return { cwd, formatted: false, unformattedFiles }
 }
 
 function formatLintSummary(
-	summary: LintSummary,
+	summary: LintSummary & { cwd?: string },
 	format: 'markdown' | 'json',
 ): string {
 	if (format === 'json') {
@@ -933,13 +1057,14 @@ function getCommonDiagnosticFile(diagnostics: LintDiagnostic[]): string | null {
 }
 
 export function compactLintSummaryForJsonText(
-	summary: LintSummary,
+	summary: LintSummary & { cwd?: string },
 ): Record<string, unknown> {
 	const commonFile = getCommonDiagnosticFile(summary.diagnostics)
 	if (!commonFile) {
 		return stripNullishDeep(summary) as unknown as Record<string, unknown>
 	}
 	return stripNullishDeep({
+		cwd: summary.cwd,
 		errorCount: summary.errorCount,
 		warningCount: summary.warningCount,
 		commonFile,
@@ -957,6 +1082,7 @@ export function compactLintFixResultForJsonText(
 	result: z.infer<typeof lintFixSchema>,
 ): Record<string, unknown> {
 	return stripNullishDeep({
+		cwd: result.cwd,
 		fixed: result.fixed,
 		remaining: compactLintSummaryForJsonText(result.remaining),
 	}) as Record<string, unknown>
@@ -1066,18 +1192,26 @@ export async function createBiomeServer(
 					},
 					async () => {
 						try {
-							const validatedPath = await validatePathOrDefault(args.path)
-							await ensurePathExists(validatedPath)
-							const summary = await runBiomeCheck(validatedPath)
+							const pathContext = await resolvePathContextOrDefault(args.path)
+							await ensurePathExists(pathContext.realPath)
+							const summary = await runBiomeCheck(
+								pathContext.realPath,
+								pathContext.worktreeRoot,
+							)
+							const output = {
+								cwd: pathContext.worktreeRoot,
+								...summary,
+							}
 							const format = args.response_format
 							lintCheckLogger.info('biome_lintCheck completed', {
-								path: validatedPath,
+								path: pathContext.realPath,
+								cwd: output.cwd,
 								errorCount: summary.errorCount,
 								warningCount: summary.warningCount,
 							})
 							return createToolSuccess(
-								formatLintSummary(summary, format),
-								summary,
+								formatLintSummary(output, format),
+								output,
 							)
 						} catch (error) {
 							const failure = toToolFailure(error)
@@ -1134,12 +1268,16 @@ export async function createBiomeServer(
 					},
 					async () => {
 						try {
-							const validatedPath = await validatePathOrDefault(args.path)
-							await ensurePathExists(validatedPath)
-							const result = await runBiomeFix(validatedPath)
+							const pathContext = await resolvePathContextOrDefault(args.path)
+							await ensurePathExists(pathContext.realPath)
+							const result = await runBiomeFix(
+								pathContext.realPath,
+								pathContext.worktreeRoot,
+							)
 							const format = args.response_format
 							lintFixLogger.info('biome_lintFix completed', {
-								path: validatedPath,
+								path: pathContext.realPath,
+								cwd: result.cwd,
 								fixed: result.fixed,
 								remainingErrors: result.remaining.errorCount,
 								remainingWarnings: result.remaining.warningCount,
@@ -1203,12 +1341,16 @@ export async function createBiomeServer(
 					},
 					async () => {
 						try {
-							const validatedPath = await validatePathOrDefault(args.path)
-							await ensurePathExists(validatedPath)
-							const result = await runBiomeFormatCheck(validatedPath)
+							const pathContext = await resolvePathContextOrDefault(args.path)
+							await ensurePathExists(pathContext.realPath)
+							const result = await runBiomeFormatCheck(
+								pathContext.realPath,
+								pathContext.worktreeRoot,
+							)
 							const format = args.response_format
 							formatCheckLogger.info('biome_formatCheck completed', {
-								path: validatedPath,
+								path: pathContext.realPath,
+								cwd: result.cwd,
 								formatted: result.formatted,
 								unformattedCount: result.unformattedFiles.length,
 							})
@@ -1253,8 +1395,11 @@ export const MIN_PARENT_CHECK_MS = 50
 
 /**
  * Default idle shutdown interval in milliseconds.
+ *
+ * Zero keeps runners available unless the host opts into idle cleanup with
+ * MCP_IDLE_EXIT_MS.
  */
-export const DEFAULT_IDLE_EXIT_MS = 900_000
+export const DEFAULT_IDLE_EXIT_MS = 0
 
 /**
  * Lower bound for the idle interval to prevent event-loop saturation.
@@ -1424,8 +1569,8 @@ interface IdleExitEnv {
 /**
  * Create idle shutdown wiring from process-style environment values.
  *
- * Why: startBiomeServer should exercise the same default-on / disabled parsing
- * as unit tests without making runtime smoke wait for the 15-minute default.
+ * Why: startBiomeServer should exercise the same opt-in / disabled parsing as
+ * unit tests.
  */
 export function createIdleShutdownWatcherFromEnv(opts: {
 	env: IdleExitEnv

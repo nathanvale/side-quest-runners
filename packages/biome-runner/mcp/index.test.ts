@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
@@ -20,11 +21,44 @@ import {
 	parseBiomeOutput,
 	parseIdleExitMs,
 	parseParentCheckMs,
+	resolvePathContext,
 	SERVER_VERSION,
 	spawnWithTimeout,
 	validatePath,
 	validatePathOrDefault,
 } from './index'
+
+async function runGit(args: string[], cwd = process.cwd()): Promise<void> {
+	const proc = Bun.spawn(['git', ...args], {
+		cwd,
+		stdout: 'pipe',
+		stderr: 'pipe',
+	})
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	])
+	if (exitCode !== 0) {
+		throw new Error(`git ${args.join(' ')} failed (${exitCode}): ${stdout}${stderr}`)
+	}
+}
+
+async function createLinkedWorktree(prefix: string): Promise<{
+	worktree: string
+	cleanup: () => Promise<void>
+}> {
+	const parent = await mkdtemp(path.join(tmpdir(), `${prefix}-`))
+	const worktree = path.join(parent, 'checkout')
+	await runGit(['worktree', 'add', '--detach', worktree, 'HEAD'])
+	return {
+		worktree,
+		cleanup: async () => {
+			await runGit(['worktree', 'remove', '--force', worktree]).catch(() => undefined)
+			await rm(parent, { recursive: true, force: true })
+		},
+	}
+}
 
 describe('parseBiomeOutput', () => {
 	test('parses empty diagnostics', () => {
@@ -167,7 +201,9 @@ describe('path validation', () => {
 	})
 
 	test('rejects traversal paths outside repository', async () => {
-		await expect(validatePath('../../../etc/passwd')).rejects.toThrow('Path outside repository')
+		await expect(validatePath('../../../etc/passwd')).rejects.toThrow(
+			'Path outside configured runner repository or linked worktrees',
+		)
 	})
 
 	test('rejects symlink escape outside repository', async () => {
@@ -175,9 +211,55 @@ describe('path validation', () => {
 		await rm(linkPath, { force: true })
 		await symlink('/tmp', linkPath)
 		try {
-			await expect(validatePath(linkPath)).rejects.toThrow('Path outside repository')
+			await expect(validatePath(linkPath)).rejects.toThrow(
+				'Path outside configured runner repository or linked worktrees',
+			)
 		} finally {
 			await rm(linkPath, { force: true })
+		}
+	})
+
+	test('accepts paths in linked worktrees for the same repository', async () => {
+		_resetGitRootCache()
+		const { worktree, cleanup } = await createLinkedWorktree('biome-runner-linked-worktree')
+		try {
+			const packagePath = path.join(worktree, 'package.json')
+			const context = await resolvePathContext(packagePath)
+
+			expect(context.realPath).toBe(await realpath(packagePath))
+			expect(context.worktreeRoot).toBe(await realpath(worktree))
+		} finally {
+			await cleanup()
+		}
+	})
+
+	test('accepts missing paths under linked worktrees via nearest ancestor', async () => {
+		_resetGitRootCache()
+		const { worktree, cleanup } = await createLinkedWorktree('biome-runner-missing-linked-worktree')
+		try {
+			const missingPath = path.join(worktree, 'reports', 'future.ts')
+			const context = await resolvePathContext(missingPath)
+
+			expect(context.realPath).toBe(path.join(await realpath(worktree), 'reports', 'future.ts'))
+			expect(context.worktreeRoot).toBe(await realpath(worktree))
+		} finally {
+			await cleanup()
+		}
+	})
+
+	test('rejects paths in unrelated git repositories', async () => {
+		_resetGitRootCache()
+		const unrelatedRepo = await mkdtemp(path.join(tmpdir(), 'biome-runner-unrelated-repo-'))
+		try {
+			await runGit(['init'], unrelatedRepo)
+			const filePath = path.join(unrelatedRepo, 'index.ts')
+			await writeFile(filePath, 'export const value = 1;\n')
+
+			await expect(validatePath(filePath)).rejects.toThrow(
+				'Path outside configured runner repository or linked worktrees',
+			)
+		} finally {
+			await rm(unrelatedRepo, { recursive: true, force: true })
 		}
 	})
 })
@@ -321,16 +403,58 @@ describe('biome tools integration', () => {
 			expect(result.structuredContent).toBeDefined()
 
 			const output = result.structuredContent as {
+				cwd: string
 				errorCount: number
 				warningCount: number
 				diagnostics: Array<{ file: string; message: string }>
 			}
 
+			expect(typeof output.cwd).toBe('string')
 			expect(typeof output.errorCount).toBe('number')
 			expect(typeof output.warningCount).toBe('number')
 			expect(Array.isArray(output.diagnostics)).toBe(true)
+			expect(JSON.parse(result.content[0]?.text as string).cwd).toBe(output.cwd)
 		} finally {
 			await Promise.all([client.close(), server.close()])
+		}
+	})
+
+	test('lintCheck runs linked-worktree paths from that worktree cwd', async () => {
+		_resetGitRootCache()
+		const { worktree, cleanup } = await createLinkedWorktree('biome-runner-tool-linked-worktree')
+		const fixtureDir = path.join(worktree, 'reports', 'biome-linked-fixture')
+		await mkdir(fixtureDir, { recursive: true })
+		const fixtureFile = path.join(fixtureDir, 'good.js')
+		await writeFile(fixtureFile, 'export const ok = 1\n')
+
+		const server = await createBiomeServer()
+		const client = new Client({ name: 'biome-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'biome_lintCheck',
+				arguments: {
+					path: fixtureFile,
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(false)
+			const output = result.structuredContent as {
+				cwd: string
+				errorCount: number
+				warningCount: number
+			}
+			expect(output.cwd).toBe(await realpath(worktree))
+			expect(output.errorCount).toBe(0)
+			expect(output.warningCount).toBe(0)
+			expect(JSON.parse(result.content[0]?.text as string).cwd).toBe(output.cwd)
+		} finally {
+			await Promise.all([client.close(), server.close()])
+			await cleanup()
 		}
 	})
 
@@ -413,10 +537,12 @@ describe('biome tools integration', () => {
 			expect(result.structuredContent).toBeDefined()
 
 			const output = result.structuredContent as {
+				cwd: string
 				formatted: boolean
 				unformattedFiles: string[]
 			}
 
+			expect(typeof output.cwd).toBe('string')
 			expect(typeof output.formatted).toBe('boolean')
 			expect(Array.isArray(output.unformattedFiles)).toBe(true)
 		} finally {
@@ -450,10 +576,12 @@ describe('biome tools integration', () => {
 			expect(result.structuredContent).toBeDefined()
 
 			const output = result.structuredContent as {
+				cwd: string
 				fixed: number
 				remaining: { errorCount: number; warningCount: number; diagnostics: unknown[] }
 			}
 
+			expect(typeof output.cwd).toBe('string')
 			expect(typeof output.fixed).toBe('number')
 			expect(typeof output.remaining.errorCount).toBe('number')
 			expect(typeof output.remaining.warningCount).toBe('number')
@@ -502,16 +630,17 @@ describe('parseParentCheckMs', () => {
 })
 
 describe('parseIdleExitMs', () => {
-	test('returns default when env is undefined', () => {
+	test('returns default disabled value when env is undefined', () => {
+		expect(DEFAULT_IDLE_EXIT_MS).toBe(0)
 		expect(parseIdleExitMs(undefined)).toBe(DEFAULT_IDLE_EXIT_MS)
 	})
 
-	test('returns default for empty / whitespace string', () => {
+	test('returns default disabled value for empty / whitespace string', () => {
 		expect(parseIdleExitMs('')).toBe(DEFAULT_IDLE_EXIT_MS)
 		expect(parseIdleExitMs('   ')).toBe(DEFAULT_IDLE_EXIT_MS)
 	})
 
-	test('returns default for non-numeric / NaN values', () => {
+	test('returns default disabled value for non-numeric / NaN values', () => {
 		expect(parseIdleExitMs('abc')).toBe(DEFAULT_IDLE_EXIT_MS)
 		expect(parseIdleExitMs('NaN')).toBe(DEFAULT_IDLE_EXIT_MS)
 	})
@@ -534,23 +663,19 @@ describe('parseIdleExitMs', () => {
 })
 
 describe('createIdleShutdownWatcherFromEnv', () => {
-	test('uses the default idle timeout when env is omitted', () => {
+	test('leaves idle shutdown disabled when env is omitted', () => {
 		const calls: number[] = []
-		const fakeWatcher = {
-			recordRequestStart: () => () => {},
-			stop: () => {},
-		}
 		const result = createIdleShutdownWatcherFromEnv({
 			env: {},
 			onIdle: () => {},
 			createWatcher: (opts) => {
 				calls.push(opts.idleMs)
-				return fakeWatcher
+				return undefined
 			},
 		})
 
 		expect(result.idleMs).toBe(DEFAULT_IDLE_EXIT_MS)
-		expect(result.watcher).toBe(fakeWatcher)
+		expect(result.watcher).toBeUndefined()
 		expect(calls).toEqual([DEFAULT_IDLE_EXIT_MS])
 	})
 

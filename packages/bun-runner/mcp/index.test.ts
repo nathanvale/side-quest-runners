@@ -1,5 +1,8 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import {
@@ -18,12 +21,45 @@ import {
 	MIN_PARENT_CHECK_MS,
 	parseIdleExitMs,
 	parseParentCheckMs,
+	resolvePathContext,
 	SERVER_VERSION,
 	spawnWithTimeout,
 	validatePath,
 	validateShellSafePattern,
 } from './index'
 import { parseBunTestOutput } from './parse-utils'
+
+async function runGit(args: string[], cwd = process.cwd()): Promise<void> {
+	const proc = Bun.spawn(['git', ...args], {
+		cwd,
+		stdout: 'pipe',
+		stderr: 'pipe',
+	})
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	])
+	if (exitCode !== 0) {
+		throw new Error(`git ${args.join(' ')} failed (${exitCode}): ${stdout}${stderr}`)
+	}
+}
+
+async function createLinkedWorktree(prefix: string): Promise<{
+	worktree: string
+	cleanup: () => Promise<void>
+}> {
+	const parent = await mkdtemp(path.join(tmpdir(), `${prefix}-`))
+	const worktree = path.join(parent, 'checkout')
+	await runGit(['worktree', 'add', '--detach', worktree, 'HEAD'])
+	return {
+		worktree,
+		cleanup: async () => {
+			await runGit(['worktree', 'remove', '--force', worktree]).catch(() => undefined)
+			await rm(parent, { recursive: true, force: true })
+		},
+	}
+}
 
 describe('parseBunTestOutput', () => {
 	test('parses all passing tests', () => {
@@ -413,8 +449,81 @@ describe('validation helpers', () => {
 		await expect(validatePath('packages/bun-runner\x00')).rejects.toThrow('Path contains null byte')
 	})
 
+	test('rejects control characters', async () => {
+		await expect(validatePath('packages/bun-runner\n')).rejects.toThrow(
+			'Path contains control characters',
+		)
+	})
+
 	test('rejects traversal paths outside repository', async () => {
-		await expect(validatePath('../../../etc/passwd')).rejects.toThrow('Path outside repository')
+		await expect(validatePath('../../../etc/passwd')).rejects.toThrow(
+			'Path outside configured runner repository or linked worktrees',
+		)
+	})
+
+	test('rejects symlink escape outside repository', async () => {
+		const linkPath = path.join(process.cwd(), 'tmp-bun-outside-link')
+		await rm(linkPath, { force: true })
+		await symlink('/tmp', linkPath)
+		try {
+			await expect(validatePath(linkPath)).rejects.toThrow(
+				'Path outside configured runner repository or linked worktrees',
+			)
+		} finally {
+			await rm(linkPath, { force: true })
+		}
+	})
+
+	test('accepts paths in linked worktrees for the same repository', async () => {
+		_resetGitRootCache()
+		const { worktree, cleanup } = await createLinkedWorktree('bun-runner-linked-worktree')
+		try {
+			const packagePath = path.join(worktree, 'package.json')
+			const context = await resolvePathContext(packagePath)
+
+			expect(context.realPath).toBe(await realpath(packagePath))
+			expect(context.worktreeRoot).toBe(await realpath(worktree))
+		} finally {
+			await cleanup()
+		}
+	})
+
+	test('accepts missing paths under linked worktrees via nearest ancestor', async () => {
+		_resetGitRootCache()
+		const { worktree, cleanup } = await createLinkedWorktree('bun-runner-missing-linked-worktree')
+		try {
+			const missingPath = path.join(worktree, 'reports', 'future.test.ts')
+			const context = await resolvePathContext(missingPath)
+
+			expect(context.realPath).toBe(
+				path.join(await realpath(worktree), 'reports', 'future.test.ts'),
+			)
+			expect(context.worktreeRoot).toBe(await realpath(worktree))
+		} finally {
+			await cleanup()
+		}
+	})
+
+	test('rejects file paths when a directory is required', async () => {
+		await expect(resolvePathContext('package.json', { requireDirectory: true })).rejects.toThrow(
+			'cwd must resolve to a directory',
+		)
+	})
+
+	test('rejects paths in unrelated git repositories', async () => {
+		_resetGitRootCache()
+		const unrelatedRepo = await mkdtemp(path.join(tmpdir(), 'bun-runner-unrelated-repo-'))
+		try {
+			await runGit(['init'], unrelatedRepo)
+			const filePath = path.join(unrelatedRepo, 'index.ts')
+			await writeFile(filePath, 'export const value = 1;\n')
+
+			await expect(validatePath(filePath)).rejects.toThrow(
+				'Path outside configured runner repository or linked worktrees',
+			)
+		} finally {
+			await rm(unrelatedRepo, { recursive: true, force: true })
+		}
 	})
 
 	test('rejects unsafe shell patterns', () => {
@@ -448,7 +557,7 @@ describe('createBunInvocation', () => {
 			expect(keys.includes('TMPDIR')).toBe(true)
 			expect(keys.includes('AWS_SECRET_ACCESS_KEY')).toBe(false)
 			expect(keys.includes('GITHUB_TOKEN')).toBe(false)
-			expect(invocation.cmd).toEqual(['bun', 'test', '--', 'auth'])
+			expect(invocation.cmd).toEqual(['bun', 'test', '--test-name-pattern', 'auth'])
 		} finally {
 			if (previousNodePath === undefined) {
 				delete process.env.NODE_PATH
@@ -471,6 +580,16 @@ describe('createBunInvocation', () => {
 	test('builds coverage command with Bun coverage flag', () => {
 		const invocation = createBunCoverageInvocation()
 		expect(invocation.cmd).toEqual(['bun', 'test', '--coverage'])
+	})
+
+	test('uses positional arguments for path-like file patterns', () => {
+		expect(createBunInvocation('login.test.ts').cmd).toEqual(['bun', 'test', '--', 'login.test.ts'])
+		expect(createBunInvocation('tests/login.ts').cmd).toEqual([
+			'bun',
+			'test',
+			'--',
+			'tests/login.ts',
+		])
 	})
 })
 
@@ -518,6 +637,7 @@ describe('bun tools integration', () => {
 			expect(runTests?.title).toBe('Bun Test Runner')
 			expect(runTests?.annotations?.readOnlyHint).toBe(true)
 			expect(runTests?.outputSchema).toBeDefined()
+			expect(runTests?.inputSchema.properties?.cwd).toBeDefined()
 
 			const testFile = list.tools.find((entry) => entry.name === 'bun_testFile')
 			expect(testFile).toBeDefined()
@@ -530,6 +650,7 @@ describe('bun tools integration', () => {
 			expect(testCoverage?.title).toBe('Bun Test Coverage Reporter')
 			expect(testCoverage?.annotations?.readOnlyHint).toBe(true)
 			expect(testCoverage?.outputSchema).toBeDefined()
+			expect(testCoverage?.inputSchema.properties?.cwd).toBeDefined()
 		} finally {
 			await Promise.all([client.close(), server.close()])
 		}
@@ -556,18 +677,205 @@ describe('bun tools integration', () => {
 			expect(result.structuredContent).toBeDefined()
 
 			const summary = result.structuredContent as {
+				cwd: string
 				passed: number
 				failed: number
 				total: number
 				failures: Array<{ file: string; message: string; line: number | null }>
 			}
 
+			expect(typeof summary.cwd).toBe('string')
 			expect(typeof summary.passed).toBe('number')
 			expect(typeof summary.failed).toBe('number')
 			expect(typeof summary.total).toBe('number')
 			expect(Array.isArray(summary.failures)).toBe(true)
+
+			const text = result.content[0]?.text
+			expect(typeof text).toBe('string')
+			expect(JSON.parse(text as string).cwd).toBe(summary.cwd)
 		} finally {
 			await Promise.all([client.close(), server.close()])
+		}
+	})
+
+	test('bun_testFile runs linked-worktree files from that worktree cwd', async () => {
+		_resetGitRootCache()
+		const { worktree, cleanup } = await createLinkedWorktree('bun-runner-tool-linked-worktree')
+		const fixtureDir = path.join(worktree, 'reports', 'bun-linked-fixture')
+		await mkdir(fixtureDir, { recursive: true })
+		const fixtureFile = path.join(fixtureDir, 'pass.test.ts')
+		await writeFile(
+			fixtureFile,
+			"import { expect, test } from 'bun:test';\ntest('linked file pass', () => expect(1 + 1).toBe(2));\n",
+		)
+
+		const server = await createBunServer()
+		const client = new Client({ name: 'bun-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'bun_testFile',
+				arguments: {
+					file: fixtureFile,
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(false)
+			const output = result.structuredContent as {
+				cwd: string
+				failed: number
+				total: number
+			}
+			expect(output.cwd).toBe(await realpath(worktree))
+			expect(output.failed).toBe(0)
+			expect(output.total).toBe(1)
+			expect(JSON.parse(result.content[0]?.text as string).cwd).toBe(output.cwd)
+		} finally {
+			await Promise.all([client.close(), server.close()])
+			await cleanup()
+		}
+	})
+
+	test('bun_runTests accepts linked-worktree cwd for name filters', async () => {
+		_resetGitRootCache()
+		const { worktree, cleanup } = await createLinkedWorktree('bun-runner-cwd-linked-worktree')
+		const fixtureDir = path.join(worktree, 'reports', 'bun-cwd-fixture')
+		await mkdir(fixtureDir, { recursive: true })
+		await writeFile(
+			path.join(fixtureDir, 'pass.test.ts'),
+			"import { expect, test } from 'bun:test';\ntest('linked cwd unique pass', () => expect(true).toBe(true));\n",
+		)
+
+		const server = await createBunServer()
+		const client = new Client({ name: 'bun-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'bun_runTests',
+				arguments: {
+					cwd: fixtureDir,
+					pattern: 'linked cwd unique pass',
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(false)
+			const output = result.structuredContent as {
+				cwd: string
+				failed: number
+				total: number
+			}
+			expect(output.cwd).toBe(await realpath(fixtureDir))
+			expect(output.failed).toBe(0)
+			expect(output.total).toBe(1)
+		} finally {
+			await Promise.all([client.close(), server.close()])
+			await cleanup()
+		}
+	})
+
+	test('bun_runTests preserves subdirectory cwd for path patterns', async () => {
+		_resetGitRootCache()
+		const fixtureDir = path.join(process.cwd(), 'reports', 'bun-subdir-cwd-fixture')
+		await rm(fixtureDir, { recursive: true, force: true })
+		await mkdir(path.join(fixtureDir, 'tests'), { recursive: true })
+		await writeFile(
+			path.join(fixtureDir, 'tests', 'pass.test.ts'),
+			"import { expect, test } from 'bun:test';\ntest('subdir cwd unique pass', () => expect(true).toBe(true));\n",
+		)
+
+		const server = await createBunServer()
+		const client = new Client({ name: 'bun-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'bun_runTests',
+				arguments: {
+					cwd: fixtureDir,
+					pattern: 'tests/pass.test.ts',
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(false)
+			const output = result.structuredContent as {
+				cwd: string
+				failed: number
+				total: number
+			}
+			expect(output.cwd).toBe(await realpath(fixtureDir))
+			expect(output.failed).toBe(0)
+			expect(output.total).toBe(1)
+		} finally {
+			await Promise.all([client.close(), server.close()])
+			await rm(fixtureDir, { recursive: true, force: true })
+		}
+	})
+
+	test('bun_runTests rejects file paths as cwd', async () => {
+		_resetGitRootCache()
+		const server = await createBunServer()
+		const client = new Client({ name: 'bun-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'bun_runTests',
+				arguments: {
+					cwd: 'package.json',
+					pattern: 'nonesuchpattern',
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(true)
+			expect(result.content[0]?.text).toContain('CWD_INVALID')
+		} finally {
+			await Promise.all([client.close(), server.close()])
+		}
+	})
+
+	test('bun_runTests rejects cwd and path pattern from different worktrees', async () => {
+		_resetGitRootCache()
+		const first = await createLinkedWorktree('bun-runner-mixed-first')
+		const second = await createLinkedWorktree('bun-runner-mixed-second')
+		try {
+			const server = await createBunServer()
+			const client = new Client({ name: 'bun-client', version: '0.0.1' })
+			const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+			await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+			try {
+				const result = await client.callTool({
+					name: 'bun_runTests',
+					arguments: {
+						cwd: first.worktree,
+						pattern: path.join(second.worktree, 'package.json'),
+						response_format: 'json',
+					},
+				})
+
+				expect(result.isError).toBe(true)
+				expect(result.content[0]?.text).toContain('PATTERN_INVALID')
+			} finally {
+				await Promise.all([client.close(), server.close()])
+			}
+		} finally {
+			await first.cleanup()
+			await second.cleanup()
 		}
 	})
 
@@ -691,16 +999,17 @@ describe('parseParentCheckMs', () => {
 })
 
 describe('parseIdleExitMs', () => {
-	test('returns default when env is undefined', () => {
+	test('returns default disabled value when env is undefined', () => {
+		expect(DEFAULT_IDLE_EXIT_MS).toBe(0)
 		expect(parseIdleExitMs(undefined)).toBe(DEFAULT_IDLE_EXIT_MS)
 	})
 
-	test('returns default for empty / whitespace string', () => {
+	test('returns default disabled value for empty / whitespace string', () => {
 		expect(parseIdleExitMs('')).toBe(DEFAULT_IDLE_EXIT_MS)
 		expect(parseIdleExitMs('   ')).toBe(DEFAULT_IDLE_EXIT_MS)
 	})
 
-	test('returns default for non-numeric / NaN values', () => {
+	test('returns default disabled value for non-numeric / NaN values', () => {
 		expect(parseIdleExitMs('abc')).toBe(DEFAULT_IDLE_EXIT_MS)
 		expect(parseIdleExitMs('NaN')).toBe(DEFAULT_IDLE_EXIT_MS)
 	})
@@ -723,23 +1032,19 @@ describe('parseIdleExitMs', () => {
 })
 
 describe('createIdleShutdownWatcherFromEnv', () => {
-	test('uses the default idle timeout when env is omitted', () => {
+	test('leaves idle shutdown disabled when env is omitted', () => {
 		const calls: number[] = []
-		const fakeWatcher = {
-			recordRequestStart: () => () => {},
-			stop: () => {},
-		}
 		const result = createIdleShutdownWatcherFromEnv({
 			env: {},
 			onIdle: () => {},
 			createWatcher: (opts) => {
 				calls.push(opts.idleMs)
-				return fakeWatcher
+				return undefined
 			},
 		})
 
 		expect(result.idleMs).toBe(DEFAULT_IDLE_EXIT_MS)
-		expect(result.watcher).toBe(fakeWatcher)
+		expect(result.watcher).toBeUndefined()
 		expect(calls).toEqual([DEFAULT_IDLE_EXIT_MS])
 	})
 
