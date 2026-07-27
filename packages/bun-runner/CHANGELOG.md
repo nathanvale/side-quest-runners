@@ -1,5 +1,15 @@
 # @side-quest/bun-runner
 
+## 2.0.3
+
+### Patch Changes
+
+- [#79](https://github.com/nathanvale/side-quest-runners/pull/79) [`2a858ab`](https://github.com/nathanvale/side-quest-runners/commit/2a858abb1e005f1dbde8562de4e23a2fa8cc2a19) Thanks [@nathanvale](https://github.com/nathanvale)! - Accept linked Git worktree paths for the configured repository and include the
+  resolved execution cwd in JSON output for issue #71.
+
+- [#79](https://github.com/nathanvale/side-quest-runners/pull/79) [`2a858ab`](https://github.com/nathanvale/side-quest-runners/commit/2a858abb1e005f1dbde8562de4e23a2fa8cc2a19) Thanks [@nathanvale](https://github.com/nathanvale)! - Make idle shutdown opt-in so deferred MCP tools stay available during long
+  agent sessions unless hosts set `MCP_IDLE_EXIT_MS`.
+
 ## 2.0.2
 
 ### Patch Changes
