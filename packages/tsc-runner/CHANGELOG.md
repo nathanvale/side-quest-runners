@@ -1,5 +1,12 @@
 # @side-quest/tsc-runner
 
+## 2.0.1
+
+### Patch Changes
+
+- [#84](https://github.com/nathanvale/side-quest-runners/pull/84) [`68ceb6d`](https://github.com/nathanvale/side-quest-runners/commit/68ceb6d4710c9c2432324af865036cbe1af72e35) Thanks [@nathanvale](https://github.com/nathanvale)! - Make idle shutdown opt-in so deferred MCP tools stay available during long
+  agent sessions unless hosts set `MCP_IDLE_EXIT_MS`.
+
 ## 2.0.0
 
 ### Major Changes
