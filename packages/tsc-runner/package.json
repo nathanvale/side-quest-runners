@@ -1,6 +1,6 @@
 {
 	"name": "@side-quest/tsc-runner",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"description": "TypeScript type checker MCP server — structured diagnostics for Claude Code",
 	"author": {
 		"name": "Nathan Vale",
