@@ -75,22 +75,68 @@ function parseFailureDetails(output: string): TestFailure[] {
 	const failures: TestFailure[] = []
 	const lines = output.split('\n')
 	let currentFailure: TestFailure | null = null
-	let currentTestName: string | undefined
+	let currentFailureStartedByFailMarker = false
+	let currentFile = 'unknown'
+	let pendingDiagnosticLines: string[] = []
 
 	for (const line of lines) {
 		if (!line) continue
+
+		const fileHeaderMatch = line
+			.trim()
+			.match(/^(.+\.(?:test|spec)\.[cm]?[jt]sx?):$/)
+		if (fileHeaderMatch?.[1]) {
+			finalizeFailMarkerFallback()
+			currentFile = fileHeaderMatch[1]
+			pendingDiagnosticLines = []
+			continue
+		}
 
 		// Bun v1.3+ format: "(fail) test name [0.21ms]" marks end of failure block
 		// Extract test name and finalize the failure
 		const failMatch = line.match(/\(fail\)\s+(.+?)\s+\[/)
 		if (failMatch) {
+			const testName = failMatch[1] ?? 'unknown test'
 			if (currentFailure) {
-				// Use the test name from (fail) line as the primary identifier
-				currentTestName = failMatch[1]
-				currentFailure.message = `${currentTestName}: ${currentFailure.message}`
-				failures.push(currentFailure)
+				if (currentFailureStartedByFailMarker) {
+					failures.push(currentFailure)
+					currentFailure = createFailureFromFailMarker(
+						testName,
+						currentFile,
+						pendingDiagnosticLines,
+					)
+					currentFailureStartedByFailMarker = true
+				} else {
+					// Use the test name from (fail) line as the primary identifier
+					currentFailure.message = `${testName}: ${currentFailure.message}`
+					failures.push(currentFailure)
+					currentFailure = null
+					currentFailureStartedByFailMarker = false
+				}
+			} else {
+				currentFailure = createFailureFromFailMarker(
+					testName,
+					currentFile,
+					pendingDiagnosticLines,
+				)
+				currentFailureStartedByFailMarker = true
+			}
+			pendingDiagnosticLines = []
+			continue
+		}
+
+		if (line.match(/^\s*\d+ (?:pass|fail)$/) || line.startsWith('Ran ')) {
+			finalizeFailMarkerFallback()
+			pendingDiagnosticLines = []
+			continue
+		}
+
+		if (line.match(/^\(pass\) /)) {
+			if (!currentFailureStartedByFailMarker) {
 				currentFailure = null
 			}
+			currentFailureStartedByFailMarker = false
+			pendingDiagnosticLines = []
 			continue
 		}
 
@@ -115,10 +161,12 @@ function parseFailureDetails(output: string): TestFailure[] {
 			} else {
 				// Start tentative failure block - will only be kept if (fail) marker follows
 				currentFailure = {
-					file: 'unknown',
+					file: currentFile,
 					message: line.trim(),
 				}
 			}
+			currentFailureStartedByFailMarker = false
+			pendingDiagnosticLines = []
 			continue
 		}
 
@@ -138,8 +186,12 @@ function parseFailureDetails(output: string): TestFailure[] {
 				// Append to message (skip source code lines like "3 | test(...)")
 				currentFailure.message += `\n${line.trim()}`
 			}
+		} else if (isUsefulPendingDiagnosticLine(line)) {
+			pendingDiagnosticLines.push(line.trim())
 		}
 	}
+
+	finalizeFailMarkerFallback()
 
 	// For legacy format (✗ or FAIL), push remaining failure
 	// For v1.3+ format, orphan failures without (fail) marker are discarded
@@ -153,4 +205,55 @@ function parseFailureDetails(output: string): TestFailure[] {
 	}
 
 	return failures
+
+	function finalizeFailMarkerFallback(): void {
+		if (currentFailure && currentFailureStartedByFailMarker) {
+			failures.push(currentFailure)
+			currentFailure = null
+			currentFailureStartedByFailMarker = false
+		}
+	}
+}
+
+function createFailureFromFailMarker(
+	testName: string,
+	currentFile: string,
+	pendingDiagnosticLines: string[],
+): TestFailure {
+	const stack = pendingDiagnosticLines
+		.filter((line) => line.trim().startsWith('at '))
+		.map((line) => `${line}\n`)
+		.join('')
+	const topFrame = pendingDiagnosticLines.find((line) =>
+		line.trim().startsWith('at '),
+	)
+	const frameMatch =
+		topFrame?.match(/\((.+):(\d+):(\d+)\)/) ||
+		topFrame?.match(/at (.+):(\d+):(\d+)/)
+	const file = frameMatch?.[1] ?? currentFile
+	const line = frameMatch?.[2] ? Number.parseInt(frameMatch[2], 10) : undefined
+	const diagnosticMessage = pendingDiagnosticLines
+		.filter((line) => !line.trim().startsWith('at '))
+		.join('\n')
+	const message = diagnosticMessage
+		? `${testName}: ${diagnosticMessage}`
+		: testName
+
+	return {
+		file,
+		message,
+		...(line === undefined ? {} : { line }),
+		...(stack ? { stack } : {}),
+	}
+}
+
+function isUsefulPendingDiagnosticLine(line: string): boolean {
+	const trimmed = line.trim()
+	return (
+		trimmed.length > 0 &&
+		!trimmed.startsWith('bun test ') &&
+		!trimmed.match(/^\d+ \| /) &&
+		trimmed !== '^' &&
+		!trimmed.match(/^-+$/)
+	)
 }
