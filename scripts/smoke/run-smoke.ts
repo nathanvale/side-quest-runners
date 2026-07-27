@@ -7,7 +7,15 @@
  * against an isolated temporary sandbox rooted inside this repository.
  */
 
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import {
+	appendFile,
+	mkdir,
+	mkdtemp,
+	realpath,
+	rm,
+	writeFile,
+} from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -20,6 +28,7 @@ interface RunnerCase {
 		| 'claude-hooks'
 		| 'orphan-detection'
 		| 'idle-shutdown'
+		| 'linked-worktree-paths'
 	entrypoint: string
 	run(sandboxRoot: string): Promise<void>
 }
@@ -94,6 +103,41 @@ async function createSandboxRoot(prefix: string): Promise<string> {
 	await mkdir(parent, { recursive: true })
 	const root = await mkdtemp(path.join(parent, `${prefix}-`))
 	return root
+}
+
+async function runGit(args: string[], cwd = REPO_ROOT): Promise<void> {
+	const proc = Bun.spawn(['git', ...args], {
+		cwd,
+		stdout: 'pipe',
+		stderr: 'pipe',
+	})
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	])
+	assert(
+		exitCode === 0,
+		`git ${args.join(' ')} failed with ${exitCode}: ${stdout}${stderr}`,
+	)
+}
+
+async function createLinkedWorktree(prefix: string): Promise<{
+	worktree: string
+	cleanup: () => Promise<void>
+}> {
+	const parent = await mkdtemp(path.join(tmpdir(), `${prefix}-`))
+	const worktree = path.join(parent, 'checkout')
+	await runGit(['worktree', 'add', '--detach', worktree, 'HEAD'])
+	return {
+		worktree,
+		cleanup: async () => {
+			await runGit(['worktree', 'remove', '--force', worktree]).catch(
+				() => undefined,
+			)
+			await rm(parent, { recursive: true, force: true })
+		},
+	}
 }
 
 async function withRunnerClient<T>(args: {
@@ -570,6 +614,150 @@ function createSmokeEnv(
 	return { ...env, ...overrides }
 }
 
+function getProductionRunner(
+	name: ProductionRunnerBinary['name'],
+): ProductionRunnerBinary {
+	const runner = PRODUCTION_RUNNER_BINARIES.find((entry) => entry.name === name)
+	assert(runner, `Production runner not found: ${name}`)
+	return runner
+}
+
+function assertCwdUnderWorktree(args: {
+	actual: unknown
+	expected: string
+	worktree: string
+	label: string
+}): void {
+	assert(typeof args.actual === 'string', `${args.label} missing cwd`)
+	assert(
+		args.actual === args.expected,
+		`${args.label} expected cwd ${args.expected}, got ${args.actual}`,
+	)
+	assert(
+		args.actual === args.worktree ||
+			args.actual.startsWith(`${args.worktree}/`),
+		`${args.label} cwd was not inside linked worktree: ${args.actual}`,
+	)
+}
+
+async function runLinkedWorktreePathSmoke(_sandboxRoot: string): Promise<void> {
+	await buildProductionRunnerBinaries()
+
+	const { worktree, cleanup } = await createLinkedWorktree(
+		'side-quest-linked-worktree-smoke',
+	)
+	try {
+		const realWorktree = await realpath(worktree)
+
+		const tscProject = path.join(worktree, 'reports', 'linked-smoke-tsc')
+		await mkdir(tscProject, { recursive: true })
+		await writeFile(
+			path.join(tscProject, 'tsconfig.json'),
+			JSON.stringify(
+				{
+					compilerOptions: {
+						target: 'ES2022',
+						module: 'NodeNext',
+						moduleResolution: 'NodeNext',
+						strict: true,
+						noEmit: true,
+						skipLibCheck: true,
+						types: [],
+					},
+				},
+				null,
+				2,
+			),
+		)
+		await writeFile(path.join(tscProject, 'index.ts'), 'const ok = 1;\n')
+
+		const bunProject = path.join(worktree, 'reports', 'linked-smoke-bun')
+		await mkdir(bunProject, { recursive: true })
+		const bunTestFile = path.join(bunProject, 'pass.test.ts')
+		await writeFile(
+			bunTestFile,
+			"import { expect, test } from 'bun:test';\ntest('linked smoke pass', () => expect(2 + 2).toBe(4));\n",
+		)
+
+		const biomeProject = path.join(worktree, 'reports', 'linked-smoke-biome')
+		await mkdir(biomeProject, { recursive: true })
+		const biomeFile = path.join(biomeProject, 'good.js')
+		await writeFile(biomeFile, 'export const ok = 1\n')
+
+		const tscRunner = getProductionRunner('tsc-runner')
+		await withRunnerClient({
+			entrypoint: tscRunner.entrypoint,
+			cwd: tscRunner.packageDir,
+			run: async (client) => {
+				const result = await callTool(client, 'tsc_check', {
+					path: tscProject,
+					response_format: 'json',
+				})
+				assert(result.isError === false, 'linked tsc_check failed')
+				const output = result.structuredContent
+				assertObject(output, 'linked tsc_check structuredContent')
+				assert(output.errorCount === 0, 'linked tsc_check expected 0 errors')
+				assertCwdUnderWorktree({
+					actual: output.cwd,
+					expected: await realpath(tscProject),
+					worktree: realWorktree,
+					label: 'linked tsc_check',
+				})
+			},
+		})
+
+		const bunRunner = getProductionRunner('bun-runner')
+		await withRunnerClient({
+			entrypoint: bunRunner.entrypoint,
+			cwd: bunRunner.packageDir,
+			run: async (client) => {
+				const result = await callTool(client, 'bun_runTests', {
+					cwd: worktree,
+					pattern: bunTestFile,
+					response_format: 'json',
+				})
+				assert(result.isError === false, 'linked bun_runTests failed')
+				const output = result.structuredContent
+				assertObject(output, 'linked bun_runTests structuredContent')
+				assert(output.failed === 0, 'linked bun_runTests expected 0 failures')
+				assertCwdUnderWorktree({
+					actual: output.cwd,
+					expected: realWorktree,
+					worktree: realWorktree,
+					label: 'linked bun_runTests',
+				})
+			},
+		})
+
+		const biomeRunner = getProductionRunner('biome-runner')
+		await withRunnerClient({
+			entrypoint: biomeRunner.entrypoint,
+			cwd: biomeRunner.packageDir,
+			run: async (client) => {
+				const result = await callTool(client, 'biome_lintCheck', {
+					path: biomeFile,
+					response_format: 'json',
+				})
+				assert(result.isError === false, 'linked biome_lintCheck failed')
+				const output = result.structuredContent
+				assertObject(output, 'linked biome_lintCheck structuredContent')
+				assert(
+					output.errorCount === 0,
+					'linked biome_lintCheck expected 0 errors',
+				)
+				assertCwdUnderWorktree({
+					actual: output.cwd,
+					expected: realWorktree,
+					worktree: realWorktree,
+					label: 'linked biome_lintCheck',
+				})
+			},
+		})
+	} finally {
+		await cleanup()
+	}
+}
+
 async function writeIdleActivityFixture(
 	runnerName: ProductionRunnerBinary['name'],
 	projectDir: string,
@@ -995,6 +1183,11 @@ async function run(): Promise<void> {
 			name: 'claude-hooks',
 			entrypoint: path.join(REPO_ROOT, 'packages/claude-hooks/hooks/index.ts'),
 			run: runClaudeHooksSmoke,
+		},
+		{
+			name: 'linked-worktree-paths',
+			entrypoint: path.join(REPO_ROOT, 'packages/bun-runner/dist/index.js'),
+			run: runLinkedWorktreePathSmoke,
 		},
 		{
 			name: 'orphan-detection',

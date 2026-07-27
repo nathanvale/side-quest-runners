@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { rm, symlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
@@ -23,11 +24,44 @@ import {
 	parseIdleExitMs,
 	parseParentCheckMs,
 	parseTscOutput,
+	resolvePathContext,
 	SERVER_VERSION,
 	spawnWithTimeout,
 	validatePath,
 	validatePathOrDefault,
 } from './index'
+
+async function runGit(args: string[], cwd = process.cwd()): Promise<void> {
+	const proc = Bun.spawn(['git', ...args], {
+		cwd,
+		stdout: 'pipe',
+		stderr: 'pipe',
+	})
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	])
+	if (exitCode !== 0) {
+		throw new Error(`git ${args.join(' ')} failed (${exitCode}): ${stdout}${stderr}`)
+	}
+}
+
+async function createLinkedWorktree(prefix: string): Promise<{
+	worktree: string
+	cleanup: () => Promise<void>
+}> {
+	const parent = await mkdtemp(path.join(tmpdir(), `${prefix}-`))
+	const worktree = path.join(parent, 'checkout')
+	await runGit(['worktree', 'add', '--detach', worktree, 'HEAD'])
+	return {
+		worktree,
+		cleanup: async () => {
+			await runGit(['worktree', 'remove', '--force', worktree]).catch(() => undefined)
+			await rm(parent, { recursive: true, force: true })
+		},
+	}
+}
 
 function createCaptureWritableStream(chunks: string[]): WritableStream {
 	const decoder = new TextDecoder()
@@ -340,7 +374,9 @@ describe('path validation', () => {
 	})
 
 	test('rejects traversal paths outside repository', async () => {
-		await expect(validatePath('../../../etc/passwd')).rejects.toThrow('Path outside repository')
+		await expect(validatePath('../../../etc/passwd')).rejects.toThrow(
+			'Path outside configured runner repository or linked worktrees',
+		)
 	})
 
 	test('rejects symlink escape outside repository', async () => {
@@ -348,9 +384,55 @@ describe('path validation', () => {
 		await rm(linkPath, { force: true })
 		await symlink('/tmp', linkPath)
 		try {
-			await expect(validatePath(linkPath)).rejects.toThrow('Path outside repository')
+			await expect(validatePath(linkPath)).rejects.toThrow(
+				'Path outside configured runner repository or linked worktrees',
+			)
 		} finally {
 			await rm(linkPath, { force: true })
+		}
+	})
+
+	test('accepts paths in linked worktrees for the same repository', async () => {
+		_resetGitRootCache()
+		const { worktree, cleanup } = await createLinkedWorktree('tsc-runner-linked-worktree')
+		try {
+			const packagePath = path.join(worktree, 'package.json')
+			const context = await resolvePathContext(packagePath)
+
+			expect(context.realPath).toBe(await realpath(packagePath))
+			expect(context.worktreeRoot).toBe(await realpath(worktree))
+		} finally {
+			await cleanup()
+		}
+	})
+
+	test('accepts missing paths under linked worktrees via nearest ancestor', async () => {
+		_resetGitRootCache()
+		const { worktree, cleanup } = await createLinkedWorktree('tsc-runner-missing-linked-worktree')
+		try {
+			const missingPath = path.join(worktree, 'reports', 'future.ts')
+			const context = await resolvePathContext(missingPath)
+
+			expect(context.realPath).toBe(path.join(await realpath(worktree), 'reports', 'future.ts'))
+			expect(context.worktreeRoot).toBe(await realpath(worktree))
+		} finally {
+			await cleanup()
+		}
+	})
+
+	test('rejects paths in unrelated git repositories', async () => {
+		_resetGitRootCache()
+		const unrelatedRepo = await mkdtemp(path.join(tmpdir(), 'tsc-runner-unrelated-repo-'))
+		try {
+			await runGit(['init'], unrelatedRepo)
+			const filePath = path.join(unrelatedRepo, 'index.ts')
+			await writeFile(filePath, 'export const value = 1;\n')
+
+			await expect(validatePath(filePath)).rejects.toThrow(
+				'Path outside configured runner repository or linked worktrees',
+			)
+		} finally {
+			await rm(unrelatedRepo, { recursive: true, force: true })
 		}
 	})
 })
@@ -427,6 +509,96 @@ describe('tsc_check integration', () => {
 			expect(Array.isArray(output.errors)).toBe(true)
 		} finally {
 			await Promise.all([client.close(), server.close()])
+		}
+	})
+
+	test('tsc_check runs linked-worktree paths from that worktree cwd', async () => {
+		_resetGitRootCache()
+		const { worktree, cleanup } = await createLinkedWorktree('tsc-runner-tool-linked-worktree')
+		const fixtureDir = path.join(worktree, 'reports', 'tsc-linked-fixture')
+		await mkdir(fixtureDir, { recursive: true })
+		await writeFile(
+			path.join(fixtureDir, 'tsconfig.json'),
+			JSON.stringify(
+				{
+					compilerOptions: {
+						target: 'ES2022',
+						module: 'NodeNext',
+						moduleResolution: 'NodeNext',
+						strict: true,
+						noEmit: true,
+						skipLibCheck: true,
+						types: [],
+					},
+				},
+				null,
+				2,
+			),
+		)
+		await writeFile(path.join(fixtureDir, 'index.ts'), 'const ok = 1;\n')
+		const server = await createTscServer()
+		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'tsc_check',
+				arguments: {
+					path: fixtureDir,
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(false)
+			const output = result.structuredContent as {
+				cwd: string
+				errorCount: number
+			}
+			expect(output.cwd).toBe(await realpath(fixtureDir))
+			expect(output.cwd.startsWith(await realpath(worktree))).toBe(true)
+			expect(output.errorCount).toBe(0)
+			expect(JSON.parse(result.content[0]?.text as string).cwd).toBe(output.cwd)
+		} finally {
+			await Promise.all([client.close(), server.close()])
+			await cleanup()
+		}
+	})
+
+	test('CONFIG_NOT_FOUND is bounded to the linked worktree', async () => {
+		_resetGitRootCache()
+		const { worktree, cleanup } = await createLinkedWorktree('tsc-runner-no-config-linked-worktree')
+		await rm(path.join(worktree, 'tsconfig.json'), { force: true })
+		const fixtureDir = path.join(worktree, 'reports', 'no-config')
+		await mkdir(fixtureDir, { recursive: true })
+
+		const server = await createTscServer()
+		const client = new Client({ name: 'tsc-client', version: '0.0.1' })
+		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+
+		await Promise.all([client.connect(clientTransport), server.connect(serverTransport)])
+
+		try {
+			const result = await client.callTool({
+				name: 'tsc_check',
+				arguments: {
+					path: fixtureDir,
+					response_format: 'json',
+				},
+			})
+
+			expect(result.isError).toBe(true)
+			expect(result.content[0]?.text).toContain('CONFIG_NOT_FOUND')
+			const output = result.structuredContent as {
+				cwd: string
+				errors: Array<{ code: string }>
+			}
+			expect(output.cwd).toBe(await realpath(worktree))
+			expect(output.errors[0]?.code).toBe('CONFIG_NOT_FOUND')
+		} finally {
+			await Promise.all([client.close(), server.close()])
+			await cleanup()
 		}
 	})
 

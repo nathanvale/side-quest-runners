@@ -185,16 +185,24 @@ interface ToolFailure {
 	code: ToolErrorCode
 	message: string
 	remediationHint?: string
+	cwd?: string
 }
 
 class TscToolError extends Error {
 	code: ToolErrorCode
 	remediationHint?: string
+	cwd?: string
 
-	constructor(code: ToolErrorCode, message: string, remediationHint?: string) {
+	constructor(
+		code: ToolErrorCode,
+		message: string,
+		remediationHint?: string,
+		cwd?: string,
+	) {
 		super(message)
 		this.code = code
 		this.remediationHint = remediationHint
+		this.cwd = cwd
 	}
 }
 
@@ -223,6 +231,19 @@ const PACKAGE_VERSION: string = JSON.parse(
 export const SERVER_VERSION: string = PACKAGE_VERSION
 
 let _gitRootPromise: Promise<string> | null = null
+let _repositoryContextPromise: Promise<RepositoryContext> | null = null
+
+interface RepositoryContext {
+	worktreeRoot: string
+	gitCommonDir: string
+}
+
+interface PathContext {
+	realPath: string
+	worktreeRoot: string
+	startupRoot: string
+	gitCommonDir: string
+}
 
 /**
  * Get the git root once per process using promise coalescing.
@@ -235,12 +256,36 @@ export function getGitRoot(): Promise<string> {
 	if (_gitRootPromise !== null) {
 		return _gitRootPromise
 	}
-	_gitRootPromise = resolveGitRoot()
+	_gitRootPromise = getStartupRepositoryContext().then(
+		(context) => context.worktreeRoot,
+	)
 	return _gitRootPromise
 }
 
-async function resolveGitRoot(): Promise<string> {
-	const proc = Bun.spawn(['git', 'rev-parse', '--show-toplevel'], {
+async function getStartupRepositoryContext(): Promise<RepositoryContext> {
+	if (_repositoryContextPromise !== null) {
+		return _repositoryContextPromise
+	}
+	_repositoryContextPromise = resolveRepositoryContext(process.cwd())
+	return _repositoryContextPromise
+}
+
+async function resolveRepositoryContext(
+	cwd: string,
+): Promise<RepositoryContext> {
+	const [worktreeRoot, gitCommonDir] = await Promise.all([
+		resolveGitPath(cwd, ['--show-toplevel']),
+		resolveGitPath(cwd, ['--path-format=absolute', '--git-common-dir']),
+	])
+
+	return {
+		worktreeRoot: await realpath(worktreeRoot),
+		gitCommonDir: await realpath(gitCommonDir),
+	}
+}
+
+async function resolveGitPath(cwd: string, args: string[]): Promise<string> {
+	const proc = Bun.spawn(['git', '-C', cwd, 'rev-parse', ...args], {
 		stdout: 'pipe',
 		stderr: 'pipe',
 	})
@@ -254,7 +299,7 @@ async function resolveGitRoot(): Promise<string> {
 		throw new Error('Not inside a git repository')
 	}
 
-	return realpath(stdout.trim())
+	return stdout.trim()
 }
 
 /**
@@ -264,6 +309,7 @@ async function resolveGitRoot(): Promise<string> {
  */
 export function _resetGitRootCache(): void {
 	_gitRootPromise = null
+	_repositoryContextPromise = null
 }
 
 /**
@@ -276,11 +322,17 @@ export function _resetGitRootCache(): void {
 export async function validatePathOrDefault(
 	inputPath?: string,
 ): Promise<string> {
+	return (await resolvePathContextOrDefault(inputPath)).realPath
+}
+
+async function resolvePathContextOrDefault(
+	inputPath?: string,
+): Promise<PathContext> {
 	const candidate =
 		inputPath === undefined || inputPath.trim() === ''
 			? process.cwd()
 			: inputPath
-	return validatePath(candidate)
+	return resolvePathContext(candidate)
 }
 
 /**
@@ -290,6 +342,13 @@ export async function validatePathOrDefault(
  * escapes before any filesystem reads or command execution.
  */
 export async function validatePath(inputPath: string): Promise<string> {
+	return (await resolvePathContext(inputPath)).realPath
+}
+
+export async function resolvePathContext(
+	inputPath: string,
+	options?: { baseDir?: string },
+): Promise<PathContext> {
 	if (inputPath.includes('\x00')) {
 		throw new Error('Path contains null byte')
 	}
@@ -302,26 +361,63 @@ export async function validatePath(inputPath: string): Promise<string> {
 		throw new Error('Path cannot be empty')
 	}
 
-	const resolvedPath = path.resolve(inputPath)
+	const resolvedPath = path.resolve(
+		options?.baseDir ?? process.cwd(),
+		inputPath,
+	)
 	let realInputPath: string
+	let nearestExistingDir: string
 
 	try {
 		realInputPath = await realpath(resolvedPath)
+		nearestExistingDir = (await stat(realInputPath)).isDirectory()
+			? realInputPath
+			: path.dirname(realInputPath)
 	} catch (error) {
 		const err = error as NodeJS.ErrnoException
 		if (err.code === 'ENOENT') {
-			realInputPath = await resolveNearestAncestor(resolvedPath)
+			const resolved = await resolveNearestAncestor(resolvedPath)
+			realInputPath = resolved.realPath
+			nearestExistingDir = resolved.nearestExistingDir
 		} else {
 			throw new Error(`Cannot resolve path: ${err.message}`)
 		}
 	}
 
-	const gitRoot = await getGitRoot()
-	if (realInputPath !== gitRoot && !realInputPath.startsWith(`${gitRoot}/`)) {
-		throw new Error(`Path outside repository: ${inputPath}`)
+	const startupContext = await getStartupRepositoryContext()
+	if (isPathInsideOrEqual(realInputPath, startupContext.worktreeRoot)) {
+		return {
+			realPath: realInputPath,
+			worktreeRoot: startupContext.worktreeRoot,
+			startupRoot: startupContext.worktreeRoot,
+			gitCommonDir: startupContext.gitCommonDir,
+		}
 	}
 
-	return realInputPath
+	let targetContext: RepositoryContext
+	try {
+		targetContext = await resolveRepositoryContext(nearestExistingDir)
+	} catch {
+		throw new Error(
+			`Path outside configured runner repository or linked worktrees: ${inputPath}`,
+		)
+	}
+
+	if (
+		targetContext.gitCommonDir === startupContext.gitCommonDir &&
+		isPathInsideOrEqual(realInputPath, targetContext.worktreeRoot)
+	) {
+		return {
+			realPath: realInputPath,
+			worktreeRoot: targetContext.worktreeRoot,
+			startupRoot: startupContext.worktreeRoot,
+			gitCommonDir: targetContext.gitCommonDir,
+		}
+	}
+
+	throw new Error(
+		`Path outside configured runner repository or linked worktrees: ${inputPath}`,
+	)
 }
 
 function hasControlCharacters(value: string): boolean {
@@ -341,7 +437,10 @@ function hasControlCharacters(value: string): boolean {
  * Why: a naive fallback to path.resolve on ENOENT misses intermediate symlinks
  * that could escape the repository boundary.
  */
-async function resolveNearestAncestor(resolvedPath: string): Promise<string> {
+async function resolveNearestAncestor(resolvedPath: string): Promise<{
+	realPath: string
+	nearestExistingDir: string
+}> {
 	let dir = path.dirname(resolvedPath)
 	const suffix = path.basename(resolvedPath)
 	const segments: string[] = [suffix]
@@ -349,14 +448,30 @@ async function resolveNearestAncestor(resolvedPath: string): Promise<string> {
 	while (dir !== path.dirname(dir)) {
 		try {
 			const realDir = await realpath(dir)
-			return path.join(realDir, ...segments)
+			return {
+				realPath: path.join(realDir, ...segments),
+				nearestExistingDir: realDir,
+			}
 		} catch {
 			segments.unshift(path.basename(dir))
 			dir = path.dirname(dir)
 		}
 	}
 
-	return resolvedPath
+	return {
+		realPath: resolvedPath,
+		nearestExistingDir: path.dirname(resolvedPath),
+	}
+}
+
+function isPathInsideOrEqual(candidatePath: string, rootPath: string): boolean {
+	const relative = path.relative(rootPath, candidatePath)
+	return (
+		relative === '' ||
+		(relative.length > 0 &&
+			!relative.startsWith('..') &&
+			!path.isAbsolute(relative))
+	)
 }
 
 /**
@@ -388,24 +503,27 @@ export function parseTscOutput(output: string): TscParseResult {
 }
 
 /**
- * Find nearest tsconfig/jsconfig bounded to the current git root.
+ * Find nearest tsconfig/jsconfig bounded to a worktree root.
  *
  * Why: unbounded upward traversal can leak repository context and hit unrelated
  * configs outside the project boundary.
  */
-export async function findNearestTsConfig(filePath: string): Promise<{
+export async function findNearestTsConfig(
+	filePath: string,
+	boundaryRoot?: string,
+): Promise<{
 	found: boolean
 	configDir?: string
 	configPath?: string
 }> {
-	const gitRoot = await getGitRoot()
+	const gitRoot = boundaryRoot ?? (await getGitRoot())
 	let current = path.dirname(path.resolve(filePath))
 
-	if (current !== gitRoot && !current.startsWith(`${gitRoot}/`)) {
+	if (!isPathInsideOrEqual(current, gitRoot)) {
 		return { found: false }
 	}
 
-	while (current === gitRoot || current.startsWith(`${gitRoot}/`)) {
+	while (isPathInsideOrEqual(current, gitRoot)) {
 		for (const configFile of TSC_CONFIG_FILES) {
 			const candidatePath = path.join(current, configFile)
 			if (await fileExists(candidatePath)) {
@@ -444,10 +562,17 @@ async function resolveWorkdir(targetPath?: string): Promise<{
 	cwd: string
 	configPath: string
 }> {
-	const resolved = await validatePathOrDefault(targetPath)
+	const pathContext = await resolvePathContextOrDefault(targetPath)
+	const resolved = pathContext.realPath
+	const boundaryRoot = pathContext.worktreeRoot
 
 	if (!(await fileExists(resolved))) {
-		throw new TscToolError('PATH_NOT_FOUND', `Path not found: ${resolved}`)
+		throw new TscToolError(
+			'PATH_NOT_FOUND',
+			`Path not found: ${resolved}`,
+			undefined,
+			boundaryRoot,
+		)
 	}
 
 	const fileStat = await stat(resolved)
@@ -460,7 +585,10 @@ async function resolveWorkdir(targetPath?: string): Promise<{
 			}
 		}
 
-		const nearest = await findNearestTsConfig(path.join(resolved, 'index.ts'))
+		const nearest = await findNearestTsConfig(
+			path.join(resolved, 'index.ts'),
+			boundaryRoot,
+		)
 		if (nearest.found && nearest.configDir && nearest.configPath) {
 			return { cwd: nearest.configDir, configPath: nearest.configPath }
 		}
@@ -468,10 +596,12 @@ async function resolveWorkdir(targetPath?: string): Promise<{
 		throw new TscToolError(
 			'CONFIG_NOT_FOUND',
 			`No tsconfig.json or jsconfig.json found for directory ${resolved}`,
+			undefined,
+			boundaryRoot,
 		)
 	}
 
-	const nearest = await findNearestTsConfig(resolved)
+	const nearest = await findNearestTsConfig(resolved, boundaryRoot)
 	if (nearest.found && nearest.configDir && nearest.configPath) {
 		return { cwd: nearest.configDir, configPath: nearest.configPath }
 	}
@@ -479,6 +609,8 @@ async function resolveWorkdir(targetPath?: string): Promise<{
 	throw new TscToolError(
 		'CONFIG_NOT_FOUND',
 		`No tsconfig.json or jsconfig.json found for file ${resolved}`,
+		undefined,
+		boundaryRoot,
 	)
 }
 
@@ -511,6 +643,8 @@ export async function spawnWithTimeout(
 			throw new TscToolError(
 				'SPAWN_FAILURE',
 				`Failed to start TypeScript compiler: ${message}`,
+				undefined,
+				options?.cwd,
 			)
 		}
 	})()
@@ -565,12 +699,16 @@ async function runTsc(cwd: string, configPath: string): Promise<TscOutput> {
 		throw new TscToolError(
 			'TIMEOUT',
 			`TypeScript check timed out after ${TSC_TIMEOUT_MS / 1000}s in ${cwd}.`,
+			undefined,
+			cwd,
 		)
 	}
 	if (stdoutTruncated || stderrTruncated) {
 		throw new TscToolError(
 			'SPAWN_FAILURE',
 			`TypeScript output exceeded ${TSC_OUTPUT_CAPTURE_MAX_BYTES} bytes in ${cwd}. Narrow scope or reduce compiler verbosity.`,
+			undefined,
+			cwd,
 		)
 	}
 
@@ -585,6 +723,8 @@ async function runTsc(cwd: string, configPath: string): Promise<TscOutput> {
 		throw new TscToolError(
 			'SPAWN_FAILURE',
 			`Failed to start TypeScript compiler from ${cwd}: ${stderr.trim()}`,
+			undefined,
+			cwd,
 		)
 	}
 
@@ -719,6 +859,7 @@ function toToolFailure(error: unknown): ToolFailure {
 			code: error.code,
 			message: error.message,
 			remediationHint: error.remediationHint,
+			cwd: error.cwd,
 		}
 	}
 
@@ -1064,7 +1205,7 @@ export async function createTscServer(
 						} catch (error) {
 							const failure = toToolFailure(error)
 							const failureOutput: TscOutput = {
-								cwd: process.cwd(),
+								cwd: failure.cwd ?? process.cwd(),
 								configPath: '',
 								timedOut: failure.code === 'TIMEOUT',
 								exitCode: 1,
